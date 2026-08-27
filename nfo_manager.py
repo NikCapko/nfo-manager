@@ -2,8 +2,9 @@
 """
 Simple .nfo editor (single-file) using PyQt6.
 Features:
-- Left panel: all .nfo files in the current folder (optional subfolders)
-- Click a file to load it into the editor
+- Left panel: all .mp4 files in the current folder (optional subfolders)
+- For each .mp4, looks for a matching .nfo (same name, .nfo extension)
+- If .nfo exists — loads it; if not — starts with empty fields
 - Edit main movie fields: title, originaltitle, year, plot, original_filename
 - Edit studios, genres (categories), actors (name + role), and tags
 - Preserve other XML nodes when saving (only update the nodes we touch)
@@ -13,7 +14,7 @@ Dependencies:
     pip install PyQt6
 
 Run:
-    python3 nfo_editor_pyqt.py [path_to_file.nfo | path_to_folder]
+    python3 nfo_editor_pyqt.py [path_to_file.mp4 | path_to_file.nfo | path_to_folder]
 """
 
 from __future__ import annotations
@@ -140,17 +141,19 @@ def add_actor_to_history(history: dict, name: str, role: str):
         save_history(history)
 
 
-def iter_nfo_files(folder: Path, recursive: bool):
-    """Yield .nfo paths in folder. Skips hidden directories when recursive."""
+def iter_mp4_files(folder: Path, recursive: bool):
+    """Yield .mp4 paths in folder. Skips hidden directories when recursive."""
     if not folder or not folder.is_dir():
         return
     if not recursive:
-        yield from folder.glob("*.nfo")
+        for p in folder.iterdir():
+            if p.is_file() and p.suffix.lower() == ".mp4":
+                yield p
         return
     for dirpath, dirnames, filenames in os.walk(folder):
         dirnames[:] = [d for d in dirnames if not d.startswith(".")]
         for name in filenames:
-            if name.lower().endswith(".nfo"):
+            if name.lower().endswith(".mp4"):
                 yield Path(dirpath) / name
 
 
@@ -158,6 +161,7 @@ def iter_nfo_files(folder: Path, recursive: bool):
 class NfoDocument:
     def __init__(self, path: Optional[Path] = None):
         self.path = Path(path) if path else None
+        self.video_path: Optional[Path] = None
         self.tree: Optional[ET.ElementTree] = None
         self.root: Optional[ET.Element] = None
 
@@ -165,12 +169,27 @@ class NfoDocument:
         self.path = Path(path)
         self.tree = ET.parse(self.path)
         self.root = self.tree.getroot()
+        # предполагаемое видео — с тем же именем, но .mp4
+        potential_video = self.path.with_suffix(".mp4")
+        self.video_path = potential_video if potential_video.exists() else None
+
+    def new_empty(self, video_path: Path):
+        """Создаёт пустой документ, привязанный к видео-файлу.
+        NFO будет сохранён по пути video_path.with_suffix('.nfo')."""
+        self.video_path = Path(video_path)
+        self.path = self.video_path.with_suffix(".nfo")
+        self.root = ET.Element("movie")
+        self.tree = ET.ElementTree(self.root)
 
     def save(self, path: Optional[Path] = None):
         if path:
             self.path = Path(path)
-        if not self.path or not self.root:
-            raise RuntimeError("No document loaded")
+        if not self.path:
+            raise RuntimeError("No document path")
+        if self.root is None:
+            # если корня ещё нет (например, после new_empty без изменений) — создаём
+            self.root = ET.Element("movie")
+            self.tree = ET.ElementTree(self.root)
         self._indent(self.root)
         self.tree.write(str(self.path), encoding="utf-8", xml_declaration=True)
 
@@ -294,21 +313,10 @@ class NfoEditorWindow(QMainWindow):
         self._dirty = False
         self._loading = False
         self._ignore_selection = False
-        self._nfo_paths: list[Path] = []
+        self._mp4_paths: list[Path] = []
 
         self._build_ui()
         self._connect_dirty_signals()
-
-        save_shortcut = QShortcut(QKeySequence("Ctrl+S"), self)
-        save_shortcut.activated.connect(self.save_file)
-        save_as_shortcut = QShortcut(QKeySequence("Ctrl+Shift+S"), self)
-        save_as_shortcut.activated.connect(self.save_file_as)
-        open_folder_shortcut = QShortcut(QKeySequence("Ctrl+O"), self)
-        open_folder_shortcut.activated.connect(self.open_folder)
-        open_file_shortcut = QShortcut(QKeySequence("Ctrl+Shift+O"), self)
-        open_file_shortcut.activated.connect(self.open_file)
-        refresh_shortcut = QShortcut(QKeySequence("F5"), self)
-        refresh_shortcut.activated.connect(self.refresh_file_list)
 
         if initial_path:
             self._open_initial_path(Path(initial_path))
@@ -325,14 +333,25 @@ class NfoEditorWindow(QMainWindow):
         if path.is_dir():
             self._open_folder(path, autoload_first=True)
             return
-        if path.is_file():
+        suffix = path.suffix.lower()
+        if suffix == ".nfo":
+            # ищем соответствующий mp4
+            mp4 = path.with_suffix(".mp4")
+            if mp4.exists():
+                self._open_folder(path.parent, select=mp4)
+            else:
+                # mp4 нет — просто открываем папку
+                self._open_folder(path.parent, autoload_first=True)
+            return
+        if suffix == ".mp4":
             self._open_folder(path.parent, select=path)
             return
-        QMessageBox.critical(self, "Ошибка", f"Путь не найден:\n{path}")
+        # другой файл — открываем его папку
+        self._open_folder(path.parent, autoload_first=True)
 
     def _build_ui(self):
         self._build_toolbar()
-        self.statusBar().showMessage("Откройте папку или .nfo файл")
+        self.statusBar().showMessage("Откройте папку с видео")
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -382,7 +401,7 @@ class NfoEditorWindow(QMainWindow):
             self,
         )
         act_file.setShortcut(QKeySequence("Ctrl+Shift+O"))
-        act_file.setToolTip("Открыть .nfo файл (Ctrl+Shift+O)")
+        act_file.setToolTip("Открыть .nfo файл напрямую (Ctrl+Shift+O)")
         act_file.triggered.connect(self.open_file)
         tb.addAction(act_file)
 
@@ -397,11 +416,6 @@ class NfoEditorWindow(QMainWindow):
         act_save.setToolTip("Сохранить (Ctrl+S)")
         act_save.triggered.connect(self.save_file)
         tb.addAction(act_save)
-
-        #act_save_as = QAction("Сохранить как…", self)
-        #act_save_as.setShortcut(QKeySequence("Ctrl+Shift+S"))
-        #act_save_as.triggered.connect(self.save_file_as)
-        #tb.addAction(act_save_as)
 
         tb.addSeparator()
 
@@ -423,7 +437,7 @@ class NfoEditorWindow(QMainWindow):
         panel.setLayout(layout)
 
         header = QHBoxLayout()
-        title = QLabel("Файлы .nfo")
+        title = QLabel("Видео (.mp4)")
         title.setStyleSheet("font-weight: 600;")
         header.addWidget(title)
         header.addStretch()
@@ -431,6 +445,10 @@ class NfoEditorWindow(QMainWindow):
         self.lbl_file_count.setStyleSheet("color: palette(mid);")
         header.addWidget(self.lbl_file_count)
         layout.addLayout(header)
+
+        legend = QLabel("● — есть .nfo, ○ — нет")
+        legend.setStyleSheet("color: palette(mid); font-size: 11px;")
+        layout.addWidget(legend)
 
         self.lbl_folder = QLabel("Папка не выбрана")
         self.lbl_folder.setWordWrap(True)
@@ -608,19 +626,44 @@ class NfoEditorWindow(QMainWindow):
         if self.doc.path:
             name = self.doc.path.name
             mark = " •" if self._dirty else ""
-            self.setWindowTitle(f"{name}{mark} — NFO Editor")
+            new_mark = " [новый]" if self._is_new_document() else ""
+            self.setWindowTitle(f"{name}{new_mark}{mark} — NFO Editor")
         else:
             self.setWindowTitle("NFO Editor")
 
+    def _is_new_document(self) -> bool:
+        """Документ считается 'новым', если nfo-файл ещё не сохранён на диск."""
+        if not self.doc.path:
+            return True
+        return not self.doc.path.exists()
+
     def _refresh_current_list_mark(self):
-        current = self.doc.path
+        current_mp4 = self.doc.video_path
+        current_res = None
+        if current_mp4:
+            try:
+                current_res = current_mp4.resolve()
+            except Exception:
+                current_res = current_mp4
+
         for i in range(self.list_files.count()):
             item = self.list_files.item(i)
             path = Path(item.data(Qt.ItemDataRole.UserRole))
-            label = self._display_name(path)
-            if current and path.resolve() == current.resolve() and self._dirty:
+            label = self._item_label(path)
+            if (
+                current_res is not None
+                and self._dirty
+                and self._paths_equal(path, current_res)
+            ):
                 label = f"{label} •"
             item.setText(label)
+
+    def _item_label(self, mp4_path: Path) -> str:
+        """Формирует подпись элемента списка с маркером наличия .nfo."""
+        base = self._display_name(mp4_path)
+        nfo_path = mp4_path.with_suffix(".nfo")
+        prefix = "● " if nfo_path.exists() else "○ "
+        return prefix + base
 
     def _display_name(self, path: Path) -> str:
         if self.current_folder and self.chk_recursive.isChecked():
@@ -636,10 +679,16 @@ class NfoEditorWindow(QMainWindow):
             return text
         return "…" + text[-47:]
 
+    def _paths_equal(self, a: Path, b) -> bool:
+        try:
+            return Path(a).resolve() == Path(b).resolve()
+        except Exception:
+            return Path(a) == Path(b)
+
     # ---------- folder / file list ----------
     def open_folder(self):
         start = str(self.current_folder) if self.current_folder else ""
-        path = QFileDialog.getExistingDirectory(self, "Открыть папку с .nfo", start)
+        path = QFileDialog.getExistingDirectory(self, "Открыть папку с видео", start)
         if not path:
             return
         if not self._confirm_leave():
@@ -650,14 +699,14 @@ class NfoEditorWindow(QMainWindow):
         self.history["recursive"] = bool(checked)
         save_history(self.history)
         if self.current_folder:
-            select = self.doc.path
+            select = self.doc.video_path
             self._scan_and_fill(select=select)
 
     def refresh_file_list(self):
         if not self.current_folder:
             self.statusBar().showMessage("Сначала откройте папку", 3000)
             return
-        self._scan_and_fill(select=self.doc.path)
+        self._scan_and_fill(select=self.doc.video_path)
         self.statusBar().showMessage("Список файлов обновлён", 2000)
 
     def _open_folder(
@@ -680,46 +729,50 @@ class NfoEditorWindow(QMainWindow):
         target: Optional[Path] = None
         if select is not None:
             target = Path(select)
-        elif autoload_first and self._nfo_paths:
-            target = self._nfo_paths[0]
+        elif autoload_first and self._mp4_paths:
+            target = self._mp4_paths[0]
 
         if target is not None:
-            self._load_nfo_file(target)
-        elif not self._nfo_paths:
+            self._load_for_mp4(target)
+        elif not self._mp4_paths:
             self._clear_editor()
-            self.statusBar().showMessage("В папке нет .nfo файлов", 4000)
+            self.statusBar().showMessage("В папке нет .mp4 файлов", 4000)
 
     def _scan_and_fill(self, select: Optional[Path] = None):
         folder = self.current_folder
         if folder is None:
             return
         files = sorted(
-            iter_nfo_files(folder, self.chk_recursive.isChecked()),
+            iter_mp4_files(folder, self.chk_recursive.isChecked()),
             key=lambda p: str(p).casefold(),
         )
-        self._nfo_paths = files
+        self._mp4_paths = files
         visible_n = 0
 
         self._ignore_selection = True
         self.list_files.clear()
         select_item = None
-        select_resolved = None
+        select_res = None
         if select is not None:
             try:
-                select_resolved = Path(select).resolve()
+                select_res = Path(select).resolve()
             except Exception:
-                select_resolved = Path(select)
+                select_res = Path(select)
 
         for path in files:
-            item = QListWidgetItem(self._display_name(path))
+            label = self._item_label(path)
+            item = QListWidgetItem(label)
             item.setData(Qt.ItemDataRole.UserRole, str(path))
             item.setToolTip(str(path))
+            # если nfo ещё нет — делаем текст чуть бледнее
+            nfo_path = path.with_suffix(".nfo")
+            if not nfo_path.exists():
+                palette = self.list_files.palette()
+                color = palette.color(palette.ColorGroup.Disabled, palette.ColorRole.Text)
+                from PyQt6.QtGui import QBrush
+                item.setForeground(QBrush(color))
             self.list_files.addItem(item)
-            try:
-                resolved = path.resolve()
-            except Exception:
-                resolved = path
-            if select_resolved is not None and resolved == select_resolved:
+            if select_res is not None and self._paths_equal(path, select_res):
                 select_item = item
 
         self._apply_file_filter()
@@ -735,7 +788,9 @@ class NfoEditorWindow(QMainWindow):
 
         if self.current_folder:
             extra = f", показано {visible_n}" if visible_n != len(files) else ""
-            self.statusBar().showMessage(f"{folder} — {len(files)} .nfo{extra}", 4000)
+            self.statusBar().showMessage(
+                f"{folder} — {len(files)} .mp4{extra}", 4000
+            )
 
     def _apply_file_filter(self):
         q = self.file_filter.text().strip().casefold()
@@ -746,70 +801,68 @@ class NfoEditorWindow(QMainWindow):
     def _on_file_current_changed(self, current: Optional[QListWidgetItem], _previous):
         if self._ignore_selection or current is None:
             return
-        path = Path(current.data(Qt.ItemDataRole.UserRole))
-        if self.doc.path:
-            try:
-                if path.resolve() == self.doc.path.resolve():
-                    return
-            except Exception:
-                if path == self.doc.path:
-                    return
+        mp4_path = Path(current.data(Qt.ItemDataRole.UserRole))
+        if self.doc.video_path and self._paths_equal(mp4_path, self.doc.video_path):
+            return
         if not self._confirm_leave():
             self._reselect_current_doc()
             return
-        self._load_nfo_file(path)
+        self._load_for_mp4(mp4_path)
 
     def _on_file_double_clicked(self, item: QListWidgetItem):
-        path = Path(item.data(Qt.ItemDataRole.UserRole))
-        if self.doc.path and path.resolve() == self.doc.path.resolve():
+        mp4_path = Path(item.data(Qt.ItemDataRole.UserRole))
+        if self.doc.video_path and self._paths_equal(mp4_path, self.doc.video_path):
             return
         if not self._confirm_leave():
             self._reselect_current_doc()
             return
-        self._load_nfo_file(path)
+        self._load_for_mp4(mp4_path)
 
     def _reselect_current_doc(self):
-        if not self.doc.path:
+        current_mp4 = self.doc.video_path
+        if not current_mp4:
             return
         self._ignore_selection = True
         target = None
         try:
-            current_res = self.doc.path.resolve()
+            current_res = current_mp4.resolve()
         except Exception:
-            current_res = self.doc.path
+            current_res = current_mp4
         for i in range(self.list_files.count()):
             item = self.list_files.item(i)
             p = Path(item.data(Qt.ItemDataRole.UserRole))
-            try:
-                if p.resolve() == current_res:
-                    target = item
-                    break
-            except Exception:
-                if p == self.doc.path:
-                    target = item
-                    break
+            if self._paths_equal(p, current_res):
+                target = item
+                break
         if target is not None:
             self.list_files.setCurrentItem(target)
         self._ignore_selection = False
 
-    def _path_from_item(self, item: QListWidgetItem) -> Path:
-        return Path(item.data(Qt.ItemDataRole.UserRole))
-
-    def _load_nfo_file(self, path: Path) -> bool:
-        path = Path(path)
+    def _load_for_mp4(self, mp4_path: Path) -> bool:
+        """Загружает .nfo для данного .mp4, либо создаёт пустой документ."""
+        mp4_path = Path(mp4_path)
+        nfo_path = mp4_path.with_suffix(".nfo")
         try:
             self._loading = True
-            self.doc.load(path)
+            if nfo_path.exists():
+                self.doc.load(nfo_path)
+                # на всякий случай явно выставим video_path
+                self.doc.video_path = mp4_path
+            else:
+                self.doc.new_empty(mp4_path)
             self._populate_from_doc()
             self._dirty = False
             self._update_title()
             self._reselect_current_doc()
             self._refresh_current_list_mark()
-            self.statusBar().showMessage(str(path), 4000)
+            status = (
+                f"{nfo_path}" if nfo_path.exists() else f"{nfo_path} (новый, не сохранён)"
+            )
+            self.statusBar().showMessage(status, 4000)
             return True
         except Exception as e:
             QMessageBox.critical(
-                self, "Ошибка", f"Не удалось открыть файл:\n{path}\n\n{e}"
+                self, "Ошибка", f"Не удалось открыть файл:\n{nfo_path}\n\n{e}"
             )
             return False
         finally:
@@ -873,31 +926,44 @@ class NfoEditorWindow(QMainWindow):
             return
         if not self._confirm_leave():
             return
+        suffix = path.suffix.lower()
         if path.is_dir():
             self._open_folder(path, autoload_first=True)
-        elif path.suffix.lower() == ".nfo":
+        elif suffix == ".mp4":
             self._open_folder(path.parent, select=path)
+        elif suffix == ".nfo":
+            # ищем соответствующий mp4
+            mp4 = path.with_suffix(".mp4")
+            if mp4.exists():
+                self._open_folder(path.parent, select=mp4)
+            else:
+                self._open_folder(path.parent, autoload_first=True)
         else:
-            folder = path.parent
-            self._open_folder(folder, autoload_first=True)
+            self._open_folder(path.parent, autoload_first=True)
 
     def browse_original_file(self):
-        filename = self.fields["original_filename"].text().strip()
-        if not filename:
-            QMessageBox.warning(self, "Ошибка", "Поле пустое")
-            return
-        base_dir = self.doc.path.parent if self.doc.path else None
-        path = os.path.join(str(base_dir), filename) if base_dir else filename
-        if not os.path.exists(path):
-            QMessageBox.warning(self, "Ошибка", f"Файл не найден: {path}")
+        # приоритет — video_path, потом папка nfo
+        if self.doc.video_path and self.doc.video_path.exists():
+            target = self.doc.video_path
+        else:
+            filename = self.fields["original_filename"].text().strip()
+            if not filename:
+                QMessageBox.warning(self, "Ошибка", "Поле пустое")
+                return
+            base_dir = self.doc.path.parent if self.doc.path else None
+            target_str = os.path.join(str(base_dir), filename) if base_dir else filename
+            target = Path(target_str)
+
+        if not target.exists():
+            QMessageBox.warning(self, "Ошибка", f"Файл не найден: {target}")
             return
         try:
             if sys.platform.startswith("darwin"):
-                subprocess.Popen(["open", path])
+                subprocess.Popen(["open", str(target)])
             elif os.name == "nt":
-                os.startfile(path)  # type: ignore[attr-defined]
+                os.startfile(str(target))  # type: ignore[attr-defined]
             else:
-                for cmd in (["mpv", path], ["xdg-open", path]):
+                for cmd in (["mpv", str(target)], ["xdg-open", str(target)]):
                     try:
                         subprocess.Popen(cmd)
                         break
@@ -912,7 +978,7 @@ class NfoEditorWindow(QMainWindow):
         start = str(self.current_folder) if self.current_folder else ""
         path, _ = QFileDialog.getOpenFileName(
             self,
-            "Открыть .nfo",
+            "Открыть .nfo напрямую",
             start,
             "NFO files (*.nfo);;XML files (*.xml);;All files (*)",
         )
@@ -921,7 +987,13 @@ class NfoEditorWindow(QMainWindow):
         if not self._confirm_leave():
             return
         p = Path(path)
-        self._open_folder(p.parent, select=p)
+        # открываем папку и пытаемся выбрать соответствующий mp4
+        mp4 = p.with_suffix(".mp4")
+        if mp4.exists():
+            self._open_folder(p.parent, select=mp4)
+        else:
+            # mp4 нет — просто открываем папку
+            self._open_folder(p.parent, autoload_first=True)
 
     def save_file(self) -> bool:
         if not self.doc.path:
@@ -931,6 +1003,7 @@ class NfoEditorWindow(QMainWindow):
             self.doc.save()
             self._dirty = False
             self._update_title()
+            # обновляем маркер ●/○ у текущего элемента (nfo теперь существует)
             self._refresh_current_list_mark()
             self.statusBar().showMessage(f"Сохранено: {self.doc.path}", 3000)
             return True
@@ -958,7 +1031,7 @@ class NfoEditorWindow(QMainWindow):
             self._dirty = False
             if self.current_folder is None:
                 self.current_folder = Path(path).parent
-            self._scan_and_fill(select=self.doc.path)
+            self._scan_and_fill(select=self.doc.video_path)
             self._update_title()
             self.statusBar().showMessage(f"Сохранено: {path}", 3000)
             return True
@@ -967,7 +1040,7 @@ class NfoEditorWindow(QMainWindow):
             return False
 
     def _populate_from_doc(self):
-        if not self.doc.root:
+        if self.doc.root is None:
             return
         for name in NAMES:
             value = self.doc.get_text(name)
@@ -1032,7 +1105,7 @@ class NfoEditorWindow(QMainWindow):
         self._refresh_raw()
 
     def _refresh_raw(self):
-        if not self.doc.tree or self.doc.root is None:
+        if self.doc.tree is None or self.doc.root is None:
             self.raw_xml.setPlainText("")
             return
         try:
