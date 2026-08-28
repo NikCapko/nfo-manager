@@ -538,8 +538,51 @@ class NfoEditorWindow(QMainWindow):
         left_layout.addWidget(form, 1)
 
         left_layout.addWidget(self._build_list_box("Студии", "studios"))
-        left_layout.addWidget(self._build_list_box("Жанры", "genres"))
+        #left_layout.addWidget(self._build_list_box("Жанры", "genres"))
         left_layout.addWidget(self._build_list_box("Теги", "tags"))
+
+        left_layout.addWidget(QLabel("Превью видео"))
+        self.video_widget = QVideoWidget()
+        self.video_widget.setMinimumHeight(240)
+        self.video_widget.setStyleSheet("background: black;")
+        self.video_widget.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.video_widget.installEventFilter(self)
+        self.video_widget.setToolTip("← → перемотка ±10 сек, ↑ ↓ ±1 мин")
+        left_layout.addWidget(self.video_widget, 1)
+
+        self.video_slider = QSlider(Qt.Orientation.Horizontal)
+        self.video_slider.setEnabled(False)
+        self.video_slider.sliderPressed.connect(self._on_slider_pressed)
+        self.video_slider.sliderReleased.connect(self._on_slider_released)
+        self.video_slider.sliderMoved.connect(self._on_slider_moved)
+        left_layout.addWidget(self.video_slider)
+
+        # кнопки управления
+        video_btns = QHBoxLayout()
+        self.btn_play = QPushButton("▶")
+        self.btn_play.setFixedWidth(40)
+        self.btn_play.clicked.connect(self._toggle_play)
+        self.btn_stop = QPushButton("■")
+        self.btn_stop.setFixedWidth(40)
+        self.btn_stop.clicked.connect(self._stop_video)
+        video_btns.addWidget(self.btn_play)
+        video_btns.addWidget(self.btn_stop)
+        video_btns.addStretch()
+        self.lbl_time = QLabel("00:00 / 00:00")
+        self.lbl_time.setStyleSheet("color: palette(mid); font-family: monospace;")
+        video_btns.addWidget(self.lbl_time)
+        left_layout.addLayout(video_btns)
+
+        self.media_player = QMediaPlayer()
+        self.audio_output = QAudioOutput()
+        self.media_player.setAudioOutput(self.audio_output)
+        self.media_player.setVideoOutput(self.video_widget)
+        self.media_player.positionChanged.connect(self._update_time_display)
+        self.media_player.durationChanged.connect(self._update_duration)
+        self._video_duration = 0
+
+        self._slider_pressed = False
+
         return left
 
     def _build_list_box(self, title: str, kind: str) -> QWidget:
@@ -562,10 +605,10 @@ class NfoEditorWindow(QMainWindow):
             self.list_studios = lst
             btn_add.clicked.connect(self.add_studio)
             btn_remove.clicked.connect(self.remove_studio)
-        elif kind == "genres":
-            self.list_genres = lst
-            btn_add.clicked.connect(self.add_genre)
-            btn_remove.clicked.connect(self.remove_genre)
+        #elif kind == "genres":
+        #    self.list_genres = lst
+        #    btn_add.clicked.connect(self.add_genre)
+        #    btn_remove.clicked.connect(self.remove_genre)
         else:
             self.list_tags = lst
             btn_add.clicked.connect(self.add_tag)
@@ -599,48 +642,6 @@ class NfoEditorWindow(QMainWindow):
         aa.addWidget(btn_remove_actor)
         aa.addStretch()
         right_layout.addLayout(aa)
-
-        right_layout.addWidget(QLabel("Превью видео"))
-        self.video_widget = QVideoWidget()
-        self.video_widget.setMinimumHeight(240)
-        self.video_widget.setStyleSheet("background: black;")
-        self.video_widget.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        self.video_widget.installEventFilter(self)
-        self.video_widget.setToolTip("← → перемотка ±10 сек, ↑ ↓ ±1 мин")
-        right_layout.addWidget(self.video_widget, 1)
-
-        self.video_slider = QSlider(Qt.Orientation.Horizontal)
-        self.video_slider.setEnabled(False)
-        self.video_slider.sliderPressed.connect(self._on_slider_pressed)
-        self.video_slider.sliderReleased.connect(self._on_slider_released)
-        self.video_slider.sliderMoved.connect(self._on_slider_moved)
-        right_layout.addWidget(self.video_slider)
-
-        # кнопки управления
-        video_btns = QHBoxLayout()
-        self.btn_play = QPushButton("▶")
-        self.btn_play.setFixedWidth(40)
-        self.btn_play.clicked.connect(self._toggle_play)
-        self.btn_stop = QPushButton("■")
-        self.btn_stop.setFixedWidth(40)
-        self.btn_stop.clicked.connect(self._stop_video)
-        video_btns.addWidget(self.btn_play)
-        video_btns.addWidget(self.btn_stop)
-        video_btns.addStretch()
-        self.lbl_time = QLabel("00:00 / 00:00")
-        self.lbl_time.setStyleSheet("color: palette(mid); font-family: monospace;")
-        video_btns.addWidget(self.lbl_time)
-        right_layout.addLayout(video_btns)
-
-        self.media_player = QMediaPlayer()
-        self.audio_output = QAudioOutput()
-        self.media_player.setAudioOutput(self.audio_output)
-        self.media_player.setVideoOutput(self.video_widget)
-        self.media_player.positionChanged.connect(self._update_time_display)
-        self.media_player.durationChanged.connect(self._update_duration)
-        self._video_duration = 0
-
-        self._slider_pressed = False
 
         right_layout.addWidget(QLabel("Исходный XML (предпросмотр)"))
         self.raw_xml = QTextEdit()
@@ -935,7 +936,7 @@ class NfoEditorWindow(QMainWindow):
             else:
                 widget.setText("")
         self.list_studios.clear()
-        self.list_genres.clear()
+        #self.list_genres.clear()
         self.list_tags.clear()
         self.table_actors.setRowCount(0)
         self.raw_xml.setPlainText("")
@@ -1113,9 +1114,9 @@ class NfoEditorWindow(QMainWindow):
         for s in self.doc.get_studios():
             self.list_studios.addItem(s)
 
-        self.list_genres.clear()
-        for g in self.doc.get_genres():
-            self.list_genres.addItem(g)
+        #self.list_genres.clear()
+        #for g in self.doc.get_genres():
+        #    self.list_genres.addItem(g)
 
         self.list_tags.clear()
         for t in self.doc.get_tags():
@@ -1145,10 +1146,10 @@ class NfoEditorWindow(QMainWindow):
         ]
         self.doc.set_studios(studios)
 
-        genres = [
-            self.list_genres.item(i).text() for i in range(self.list_genres.count())
-        ]
-        self.doc.set_genres(genres)
+        #genres = [
+        #    self.list_genres.item(i).text() for i in range(self.list_genres.count())
+        #]
+        self.doc.set_genres([])
 
         tags = [self.list_tags.item(i).text() for i in range(self.list_tags.count())]
         self.doc.set_tags(tags)
