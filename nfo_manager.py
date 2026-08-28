@@ -27,7 +27,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Optional
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QUrl
 from PyQt6.QtGui import (
     QAction,
     QCloseEvent,
@@ -36,6 +36,8 @@ from PyQt6.QtGui import (
     QKeySequence,
     QShortcut,
 )
+from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
+from PyQt6.QtMultimediaWidgets import QVideoWidget
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -52,6 +54,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QSizePolicy,
+    QSlider,
     QSplitter,
     QStyle,
     QTableWidget,
@@ -597,6 +600,48 @@ class NfoEditorWindow(QMainWindow):
         aa.addStretch()
         right_layout.addLayout(aa)
 
+        right_layout.addWidget(QLabel("Превью видео"))
+        self.video_widget = QVideoWidget()
+        self.video_widget.setMinimumHeight(240)
+        self.video_widget.setStyleSheet("background: black;")
+        self.video_widget.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.video_widget.installEventFilter(self)
+        self.video_widget.setToolTip("← → перемотка ±10 сек, ↑ ↓ ±1 мин")
+        right_layout.addWidget(self.video_widget, 1)
+
+        self.video_slider = QSlider(Qt.Orientation.Horizontal)
+        self.video_slider.setEnabled(False)
+        self.video_slider.sliderPressed.connect(self._on_slider_pressed)
+        self.video_slider.sliderReleased.connect(self._on_slider_released)
+        self.video_slider.sliderMoved.connect(self._on_slider_moved)
+        right_layout.addWidget(self.video_slider)
+
+        # кнопки управления
+        video_btns = QHBoxLayout()
+        self.btn_play = QPushButton("▶")
+        self.btn_play.setFixedWidth(40)
+        self.btn_play.clicked.connect(self._toggle_play)
+        self.btn_stop = QPushButton("■")
+        self.btn_stop.setFixedWidth(40)
+        self.btn_stop.clicked.connect(self._stop_video)
+        video_btns.addWidget(self.btn_play)
+        video_btns.addWidget(self.btn_stop)
+        video_btns.addStretch()
+        self.lbl_time = QLabel("00:00 / 00:00")
+        self.lbl_time.setStyleSheet("color: palette(mid); font-family: monospace;")
+        video_btns.addWidget(self.lbl_time)
+        right_layout.addLayout(video_btns)
+
+        self.media_player = QMediaPlayer()
+        self.audio_output = QAudioOutput()
+        self.media_player.setAudioOutput(self.audio_output)
+        self.media_player.setVideoOutput(self.video_widget)
+        self.media_player.positionChanged.connect(self._update_time_display)
+        self.media_player.durationChanged.connect(self._update_duration)
+        self._video_duration = 0
+
+        self._slider_pressed = False
+
         right_layout.addWidget(QLabel("Исходный XML (предпросмотр)"))
         self.raw_xml = QTextEdit()
         self.raw_xml.setReadOnly(True)
@@ -768,8 +813,11 @@ class NfoEditorWindow(QMainWindow):
             nfo_path = path.with_suffix(".nfo")
             if not nfo_path.exists():
                 palette = self.list_files.palette()
-                color = palette.color(palette.ColorGroup.Disabled, palette.ColorRole.Text)
+                color = palette.color(
+                    palette.ColorGroup.Disabled, palette.ColorRole.Text
+                )
                 from PyQt6.QtGui import QBrush
+
                 item.setForeground(QBrush(color))
             self.list_files.addItem(item)
             if select_res is not None and self._paths_equal(path, select_res):
@@ -788,9 +836,7 @@ class NfoEditorWindow(QMainWindow):
 
         if self.current_folder:
             extra = f", показано {visible_n}" if visible_n != len(files) else ""
-            self.statusBar().showMessage(
-                f"{folder} — {len(files)} .mp4{extra}", 4000
-            )
+            self.statusBar().showMessage(f"{folder} — {len(files)} .mp4{extra}", 4000)
 
     def _apply_file_filter(self):
         q = self.file_filter.text().strip().casefold()
@@ -856,8 +902,20 @@ class NfoEditorWindow(QMainWindow):
             self._reselect_current_doc()
             self._refresh_current_list_mark()
             status = (
-                f"{nfo_path}" if nfo_path.exists() else f"{nfo_path} (новый, не сохранён)"
+                f"{nfo_path}"
+                if nfo_path.exists()
+                else f"{nfo_path} (новый, не сохранён)"
             )
+
+            # загружаем видео в плеер
+            self.media_player.stop()
+            self.media_player.setSource(QUrl.fromLocalFile(str(mp4_path)))
+            self.video_slider.setEnabled(False)
+            self.video_slider.setValue(0)
+            self._video_duration = 0
+            self.lbl_time.setText("00:00 / 00:00")
+            self.btn_play.setText("▶")
+
             self.statusBar().showMessage(status, 4000)
             return True
         except Exception as e:
@@ -908,6 +966,7 @@ class NfoEditorWindow(QMainWindow):
         return True
 
     def closeEvent(self, event: QCloseEvent):
+        self.media_player.stop()
         if self._confirm_leave():
             event.accept()
         else:
@@ -1246,6 +1305,83 @@ class NfoEditorWindow(QMainWindow):
         self.table_actors.blockSignals(False)
         self._mark_dirty()
 
+    def _toggle_play(self):
+        if self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+            self.media_player.pause()
+            self.btn_play.setText("▶")
+        else:
+            self.media_player.play()
+            self.btn_play.setText("❚❚")
+
+    def _stop_video(self):
+        self.media_player.stop()
+        self.media_player.setPosition(0)
+        self.btn_play.setText("▶")
+
+    def _format_time(self, ms: int) -> str:
+        """Форматирует миллисекунды в MM:SS или HH:MM:SS."""
+        if ms < 0:
+            ms = 0
+        seconds = ms // 1000
+        minutes = seconds // 60
+        hours = minutes // 60
+        seconds %= 60
+        minutes %= 60
+        if hours > 0:
+            return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+        return f"{minutes:02d}:{seconds:02d}"
+
+    def _update_time_display(self, position: int):
+        """Обновляет отображение текущей позиции."""
+        current = self._format_time(position)
+        total = self._format_time(self._video_duration)
+        self.lbl_time.setText(f"{current} / {total}")
+        if not self._slider_pressed:
+            self.video_slider.setValue(position)
+
+    def _update_duration(self, duration: int):
+        self._video_duration = duration
+        self.video_slider.setRange(0, duration)
+        self.video_slider.setEnabled(duration > 0)
+        self._update_time_display(self.media_player.position())
+
+    def _on_slider_pressed(self):
+        self._slider_pressed = True
+
+    def _on_slider_released(self):
+        self._slider_pressed = False
+        # финальная перемотка на отпущенную позицию
+        self.media_player.setPosition(self.video_slider.value())
+
+    def _on_slider_moved(self, position: int):
+        # обновляем label времени, пока тянем
+        self._update_time_display(position)
+
+    def eventFilter(self, obj, event):
+        if obj == self.video_widget and event.type() == event.Type.KeyPress:
+            key = event.key()
+            pos = self.media_player.position()
+            duration = self.media_player.duration()
+            new_pos = pos
+
+            if key == Qt.Key.Key_Left:
+                new_pos = max(0, pos - 10_000)
+            elif key == Qt.Key.Key_Right:
+                new_pos = pos + 10_000
+                if duration > 0:
+                    new_pos = min(duration, new_pos)
+            elif key == Qt.Key.Key_Up:
+                new_pos = pos + 60_000
+                if duration > 0:
+                    new_pos = min(duration, new_pos)
+            elif key == Qt.Key.Key_Down:
+                new_pos = max(0, pos - 60_000)
+            else:
+                return super().eventFilter(obj, event)
+
+            self.media_player.setPosition(new_pos)
+            return True
+        return super().eventFilter(obj, event)
 
 def main():
     app = QApplication(sys.argv)
