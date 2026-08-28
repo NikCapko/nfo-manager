@@ -66,7 +66,9 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from aspect_ratio_label import AspectRatioLabel
 from clickable_slider import ClickableSlider
+from preview_worker import PreviewWorker
 
 NAMES = [
     "title",
@@ -320,6 +322,8 @@ class NfoEditorWindow(QMainWindow):
         self._loading = False
         self._ignore_selection = False
         self._mp4_paths: list[Path] = []
+        self._preview_workers: list[PreviewWorker] = []
+        self._current_preview_path: Optional[str] = None
 
         self._build_ui()
         self._connect_dirty_signals()
@@ -544,16 +548,13 @@ class NfoEditorWindow(QMainWindow):
         # left_layout.addWidget(self._build_list_box("Жанры", "genres"))
         left_layout.addWidget(self._build_list_box("Теги", "tags"))
 
-        self.video_preview = QLabel()
-        self.video_preview.setMinimumHeight(240)
-        self.video_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.video_preview.setStyleSheet("background: #2b2b2b;")
-        self.video_preview.setScaledContents(False)
+        self.video_preview = AspectRatioLabel()
+        self.video_preview.setMinimumHeight(300)
         self.video_preview.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.video_preview.setCursor(Qt.CursorShape.PointingHandCursor)
         left_layout.addWidget(self.video_preview, 1)
 
-        left_layout.addWidget(QLabel("Превью видео"))
+        #left_layout.addWidget(QLabel("Превью видео"))
         self.video_widget = QVideoWidget()
         self.video_widget.setMinimumHeight(300)
         self.video_widget.setStyleSheet("background: black;")
@@ -1326,6 +1327,7 @@ class NfoEditorWindow(QMainWindow):
     def _toggle_play(self):
         self.video_preview.hide()
         self.video_widget.show()
+        self.video_widget.setFocus()
         if self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
             self.media_player.pause()
             self.btn_play.setText("▶")
@@ -1368,6 +1370,7 @@ class NfoEditorWindow(QMainWindow):
         self._update_time_display(self.media_player.position())
 
     def _on_slider_pressed(self):
+        self.video_widget.setFocus()
         self._slider_pressed = True
 
     def _on_slider_released(self):
@@ -1381,10 +1384,12 @@ class NfoEditorWindow(QMainWindow):
         self.media_player.setPosition(position)
 
     def eventFilter(self, obj, event):
+
         if obj == self.video_preview and event.type() == event.Type.MouseButtonPress:
                 # клик по превью — запускаем воспроизведение
                 self.video_preview.hide()
                 self.video_widget.show()
+                self.video_widget.setFocus()
                 self._toggle_play()
                 return True
 
@@ -1424,37 +1429,55 @@ class NfoEditorWindow(QMainWindow):
         return super().eventFilter(obj, event)
 
     def _extract_preview_frame(self, mp4_path: Path):
-        """Извлекает кадр из видео через ffmpeg и отображает в QLabel."""
-        import tempfile
+        """Запускает асинхронное извлечение кадра."""
+        mp4_str = str(mp4_path)
+        self._current_preview_path = mp4_str
+
+        # очищаем старое превью сразу
+        self.video_preview.clear()
+        self.video_preview.show()
+        self.video_widget.hide()
+
+        worker = PreviewWorker(mp4_path, self)
+        worker.finished.connect(self._on_preview_ready)
+        worker.failed.connect(self._on_preview_failed)
+        worker.finished.connect(worker.deleteLater)
+        worker.finished.connect(lambda: self._cleanup_workers())
+        worker.failed.connect(worker.deleteLater)
+        worker.failed.connect(lambda: self._cleanup_workers())
+        self._preview_workers.append(worker)
+        worker.start()
+
+    def _cleanup_workers(self):
+        self._preview_workers = [w for w in self._preview_workers if w.isRunning()]
+
+    def _on_preview_ready(self, video_path: str, tmp_path: str):
+        """Вызывается в главном потоке, когда кадр готов."""
+        # игнорируем, если уже загружено другое видео
+        if video_path != self._current_preview_path:
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
+            return
+        pixmap = QPixmap(tmp_path)
         try:
-            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
-                tmp_path = tmp.name
-
-            # извлекаем кадр на позиции 10% от длительности (или 1 сек)
-            # используем ffmpeg с опцией -ss для быстрой перемотки
-            cmd = [
-                "ffmpeg", "-i", str(mp4_path),
-                "-ss", "00:01:00",  # начинаем с 1 минуты
-                "-vframes", "1",
-                "-q:v", "2",
-                "-y",
-                tmp_path
-            ]
-            subprocess.run(cmd, capture_output=True, check=True, timeout=5)
-
-            pixmap = QPixmap(tmp_path)
-            if not pixmap.isNull():
-                self.video_preview.setPixmap(pixmap)
-                self.video_preview.show()
-                self.video_widget.hide()
-
             os.unlink(tmp_path)
         except Exception:
-            # если ffmpeg недоступен или ошибка — показываем заглушку
-            self.video_preview.clear()
-            self.video_preview.setText("Нет превью")
-            self.video_preview.show()
-            self.video_widget.hide()
+            pass
+        if pixmap.isNull():
+            return
+        self.video_preview.setPixmap(pixmap)
+        self.video_preview.show()
+        self.video_widget.hide()
+
+    def _on_preview_failed(self, video_path: str):
+        if video_path != self._current_preview_path:
+            return
+        self.video_preview.clear()
+        self.video_preview.setText("Нет превью")
+        self.video_preview.show()
+        self.video_widget.hide()
 
 def main():
     app = QApplication(sys.argv)
