@@ -65,6 +65,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from clickable_slider import ClickableSlider
+
 NAMES = [
     "title",
     "originaltitle",
@@ -547,10 +549,10 @@ class NfoEditorWindow(QMainWindow):
         self.video_widget.setStyleSheet("background: black;")
         self.video_widget.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.video_widget.installEventFilter(self)
-        self.video_widget.setToolTip("← → перемотка ±10 сек, ↑ ↓ ±1 мин")
+        #self.video_widget.setToolTip("← → перемотка ±10 сек, ↑ ↓ ±1 мин")
         left_layout.addWidget(self.video_widget, 1)
 
-        self.video_slider = QSlider(Qt.Orientation.Horizontal)
+        self.video_slider = ClickableSlider(Qt.Orientation.Horizontal)
         self.video_slider.setEnabled(False)
         self.video_slider.sliderPressed.connect(self._on_slider_pressed)
         self.video_slider.sliderReleased.connect(self._on_slider_released)
@@ -1352,36 +1354,47 @@ class NfoEditorWindow(QMainWindow):
     def _on_slider_released(self):
         self._slider_pressed = False
         # финальная перемотка на отпущенную позицию
-        self.media_player.setPosition(self.video_slider.value())
+        #self.media_player.setPosition(self.video_slider.value())
 
     def _on_slider_moved(self, position: int):
-        # обновляем label времени, пока тянем
+        # обновляем label времени и перематываем видео
         self._update_time_display(position)
+        self.media_player.setPosition(position)
 
     def eventFilter(self, obj, event):
-        if obj == self.video_widget and event.type() == event.Type.KeyPress:
-            key = event.key()
-            pos = self.media_player.position()
-            duration = self.media_player.duration()
-            new_pos = pos
+        if obj == self.video_widget:
+            if event.type() == event.Type.KeyPress:
+                key = event.key()
+                pos = self.media_player.position()
+                duration = self.media_player.duration()
+                new_pos = pos
 
-            if key == Qt.Key.Key_Left:
-                new_pos = max(0, pos - 10_000)
-            elif key == Qt.Key.Key_Right:
-                new_pos = pos + 10_000
-                if duration > 0:
-                    new_pos = min(duration, new_pos)
-            elif key == Qt.Key.Key_Up:
-                new_pos = pos + 60_000
-                if duration > 0:
-                    new_pos = min(duration, new_pos)
-            elif key == Qt.Key.Key_Down:
-                new_pos = max(0, pos - 60_000)
-            else:
-                return super().eventFilter(obj, event)
+                if key == Qt.Key.Key_Left:
+                    new_pos = max(0, pos - 10_000)
+                elif key == Qt.Key.Key_Right:
+                    new_pos = pos + 10_000
+                    if duration > 0:
+                        new_pos = min(duration, new_pos)
+                elif key == Qt.Key.Key_Up:
+                    new_pos = pos + 60_000
+                    if duration > 0:
+                        new_pos = min(duration, new_pos)
+                elif key == Qt.Key.Key_Down:
+                    new_pos = max(0, pos - 60_000)
+                elif key == Qt.Key.Key_Space:
+                    self._toggle_play()
+                    return True
+                else:
+                    return super().eventFilter(obj, event)
 
-            self.media_player.setPosition(new_pos)
-            return True
+                self.media_player.setPosition(new_pos)
+                return True
+
+            if event.type() == event.Type.MouseButtonPress:
+                # клик по видео — ставим/снимаем с паузы
+                self._toggle_play()
+                return True
+
         return super().eventFilter(obj, event)
 
 def main():
