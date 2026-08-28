@@ -1370,7 +1370,6 @@ class NfoEditorWindow(QMainWindow):
         self._update_time_display(self.media_player.position())
 
     def _on_slider_pressed(self):
-        self.video_widget.setFocus()
         self._slider_pressed = True
 
     def _on_slider_released(self):
@@ -1414,6 +1413,9 @@ class NfoEditorWindow(QMainWindow):
                     new_pos = max(0, pos - 60_000)
                 elif key == Qt.Key.Key_Space:
                     self._toggle_play()
+                    return True
+                elif key == Qt.Key.Key_Escape:
+                    self._stop_video()
                     return True
                 else:
                     return super().eventFilter(obj, event)
