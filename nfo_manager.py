@@ -70,7 +70,7 @@ from clickable_slider import ClickableSlider
 NAMES = [
     "title",
     "originaltitle",
-    "year",
+    #"year",
     "original_filename",
     # "rating",
     "plot",
@@ -78,7 +78,7 @@ NAMES = [
 TITLES = {
     "title": "Название",
     "originaltitle": "Оригинальное название",
-    "year": "Год",
+    # "year": "Год",
     "original_filename": "Название файла",
     # "rating": "Title 2",
     "plot": "Сюжет",
@@ -545,10 +545,11 @@ class NfoEditorWindow(QMainWindow):
 
         left_layout.addWidget(QLabel("Превью видео"))
         self.video_widget = QVideoWidget()
-        self.video_widget.setMinimumHeight(240)
+        self.video_widget.setMinimumHeight(300)
         self.video_widget.setStyleSheet("background: black;")
         self.video_widget.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.video_widget.installEventFilter(self)
+        self.video_widget.setStyleSheet("background: #2b2b2b;")
         #self.video_widget.setToolTip("← → перемотка ±10 сек, ↑ ↓ ±1 мин")
         left_layout.addWidget(self.video_widget, 1)
 
@@ -581,6 +582,8 @@ class NfoEditorWindow(QMainWindow):
         self.media_player.setVideoOutput(self.video_widget)
         self.media_player.positionChanged.connect(self._update_time_display)
         self.media_player.durationChanged.connect(self._update_duration)
+        self._initial_seek_done = False
+        self.media_player.mediaStatusChanged.connect(self._on_media_status_changed)
         self._video_duration = 0
 
         self._slider_pressed = False
@@ -913,6 +916,7 @@ class NfoEditorWindow(QMainWindow):
             # загружаем видео в плеер
             self.media_player.stop()
             self.media_player.setSource(QUrl.fromLocalFile(str(mp4_path)))
+            self._initial_seek_done = False
             self.video_slider.setEnabled(False)
             self.video_slider.setValue(0)
             self._video_duration = 0
@@ -1396,6 +1400,25 @@ class NfoEditorWindow(QMainWindow):
                 return True
 
         return super().eventFilter(obj, event)
+
+    def _on_media_status_changed(self, status):
+        """При первой буферизации — перематываем на превью-кадр и ставим на паузу."""
+        from PyQt6.QtMultimedia import QMediaPlayer
+        if status in (
+            QMediaPlayer.MediaStatus.BufferedMedia,
+            QMediaPlayer.MediaStatus.LoadedMedia,
+        ):
+            if not self._initial_seek_done:
+                self._initial_seek_done = True
+                # выбираем позицию для превью: 10% от длительности, но не меньше 1 сек
+                duration = self.media_player.duration()
+                if duration > 0:
+                    preview_pos = max(1000, int(duration * 0.1))
+                    preview_pos = min(preview_pos, duration - 100)
+                else:
+                    preview_pos = 1000
+                self.media_player.setPosition(preview_pos)
+                self.media_player.pause()
 
 def main():
     app = QApplication(sys.argv)
