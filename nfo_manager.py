@@ -273,7 +273,7 @@ class NfoDocument:
     def get_tags(self):
         if self.root is None:
             return []
-        return [t.text for t in self.root.findall("tag") if t.text]
+        return sorted([t.text for t in self.root.findall("tag") if t.text])
 
     def set_tags(self, tags):
         if self.root is None:
@@ -1435,6 +1435,11 @@ class NfoEditorWindow(QMainWindow):
         mp4_str = str(mp4_path)
         self._current_preview_path = mp4_str
 
+        # отменяем старые воркеры
+        for worker in self._preview_workers:
+            if worker.isRunning():
+                worker.requestInterruption()
+
         # очищаем старое превью сразу
         self.video_preview.clear()
         self.video_preview.show()
@@ -1443,12 +1448,17 @@ class NfoEditorWindow(QMainWindow):
         worker = PreviewWorker(mp4_path, self)
         worker.finished.connect(self._on_preview_ready)
         worker.failed.connect(self._on_preview_failed)
-        worker.finished.connect(worker.deleteLater)
-        worker.finished.connect(lambda: self._cleanup_workers())
-        worker.failed.connect(worker.deleteLater)
-        worker.failed.connect(lambda: self._cleanup_workers())
+        # удаляем воркер только после завершения
+        worker.finished.connect(lambda: self._remove_worker(worker))
+        worker.failed.connect(lambda: self._remove_worker(worker))
         self._preview_workers.append(worker)
         worker.start()
+
+    def _remove_worker(self, worker: PreviewWorker):
+        """Удаляет завершённый воркер из списка."""
+        if worker in self._preview_workers:
+            self._preview_workers.remove(worker)
+        worker.deleteLater()
 
     def _cleanup_workers(self):
         self._preview_workers = [w for w in self._preview_workers if w.isRunning()]
