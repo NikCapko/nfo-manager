@@ -128,11 +128,10 @@ def add_to_history_list(history: dict, key: str, value: str):
     if not value:
         return
     lst = history.setdefault(key, [])
-    if value not in lst:
-        lst.append(value)
-        if len(lst) > 500:
-            history[key] = lst[-500:]
-        save_history(history)
+    if value in lst:
+        lst.remove(value)
+    lst.append(value)
+    save_history(history)
 
 
 def add_actor_to_history(history: dict, name: str, role: str):
@@ -142,11 +141,10 @@ def add_actor_to_history(history: dict, name: str, role: str):
         return
     actors = history.setdefault("actors", [])
     entry = {"name": name, "role": role}
-    if entry not in actors:
-        actors.append(entry)
-        if len(actors) > 500:
-            history["actors"] = actors[-500:]
-        save_history(history)
+    if entry in actors:
+        actors.remove(entry)
+    actors.append(entry)
+    save_history(history)
 
 
 def iter_mp4_files(folder: Path, recursive: bool):
