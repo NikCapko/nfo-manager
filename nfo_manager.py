@@ -35,7 +35,6 @@ from PyQt6.QtGui import (
     QDropEvent,
     QKeySequence,
     QPixmap,
-    QShortcut,
 )
 from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PyQt6.QtMultimediaWidgets import QVideoWidget
@@ -55,7 +54,6 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QSizePolicy,
-    QSlider,
     QSplitter,
     QStyle,
     QTableWidget,
@@ -73,7 +71,7 @@ from preview_worker import PreviewWorker
 NAMES = [
     "title",
     "originaltitle",
-    # "year",
+    "year",
     "original_filename",
     # "rating",
     "plot",
@@ -81,7 +79,7 @@ NAMES = [
 TITLES = {
     "title": "Название",
     "originaltitle": "Оригинальное название",
-    # "year": "Год",
+    "year": "Год",
     "original_filename": "Название файла",
     # "rating": "Title 2",
     "plot": "Сюжет",
@@ -547,14 +545,16 @@ class NfoEditorWindow(QMainWindow):
         left_layout.addWidget(self._build_list_box("Теги", "tags"))
 
         self.video_preview = AspectRatioLabel()
-        self.video_preview.setMinimumHeight(300)
+        self.video_preview.setMaximumHeight(270)
+        self.video_preview.setMinimumHeight(270)
         self.video_preview.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.video_preview.setCursor(Qt.CursorShape.PointingHandCursor)
         left_layout.addWidget(self.video_preview, 1)
 
-        #left_layout.addWidget(QLabel("Превью видео"))
+        # left_layout.addWidget(QLabel("Превью видео"))
         self.video_widget = QVideoWidget()
-        self.video_widget.setMinimumHeight(300)
+        self.video_widget.setMaximumHeight(270)
+        self.video_widget.setMinimumHeight(270)
         self.video_widget.setStyleSheet("background: black;")
         self.video_widget.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.video_widget.setStyleSheet("background: #2b2b2b;")
@@ -824,6 +824,7 @@ class NfoEditorWindow(QMainWindow):
             label = self._item_label(path)
             item = QListWidgetItem(label)
             item.setData(Qt.ItemDataRole.UserRole, str(path))
+            item.setData(Qt.ItemDataRole.UserRole + 1, self._build_search_text(path))
             item.setToolTip(str(path))
             # если nfo ещё нет — делаем текст чуть бледнее
             nfo_path = path.with_suffix(".nfo")
@@ -858,7 +859,11 @@ class NfoEditorWindow(QMainWindow):
         q = self.file_filter.text().strip().casefold()
         for i in range(self.list_files.count()):
             item = self.list_files.item(i)
-            item.setHidden(bool(q) and q not in item.text().casefold())
+            if not q:
+                item.setHidden(False)
+                continue
+            search_text = item.data(Qt.ItemDataRole.UserRole + 1) or ""
+            item.setHidden(q not in search_text.casefold())
 
     def _on_file_current_changed(self, current: Optional[QListWidgetItem], _previous):
         if self._ignore_selection or current is None:
@@ -1340,6 +1345,42 @@ class NfoEditorWindow(QMainWindow):
         self.media_player.setPosition(0)
         self.btn_play.setText("▶")
 
+    def _build_search_text(self, mp4_path: Path) -> str:
+        """Собирает строку для поиска: имя файла + поля из .nfo (если есть)."""
+        parts = [mp4_path.name]
+        nfo_path = mp4_path.with_suffix(".nfo")
+        if nfo_path.exists():
+            try:
+                tree = ET.parse(nfo_path)
+                root = tree.getroot()
+                # простые текстовые поля
+                for tag in ("title", "originaltitle", "year", "plot"):
+                    el = root.find(tag)
+                    if el is not None and el.text:
+                        parts.append(el.text.strip())
+                # set/name
+                set_el = root.find("set")
+                if set_el is not None:
+                    name_el = set_el.find("name")
+                    if name_el is not None and name_el.text:
+                        parts.append(name_el.text.strip())
+                # повторяющиеся поля
+                for tag in ("genre", "tag", "studio"):
+                    for el in root.findall(tag):
+                        if el.text:
+                            parts.append(el.text.strip())
+                # актёры
+                for actor in root.findall("actor"):
+                    name = actor.findtext("name") or ""
+                    role = actor.findtext("role") or ""
+                    if name:
+                        parts.append(name.strip())
+                    if role:
+                        parts.append(role.strip())
+            except Exception:
+                pass
+        return " ".join(parts)
+
     def _format_time(self, ms: int) -> str:
         """Форматирует миллисекунды в MM:SS или HH:MM:SS."""
         if ms < 0:
@@ -1383,12 +1424,12 @@ class NfoEditorWindow(QMainWindow):
     def eventFilter(self, obj, event):
 
         if obj == self.video_preview and event.type() == event.Type.MouseButtonPress:
-                # клик по превью — запускаем воспроизведение
-                self.video_preview.hide()
-                self.video_widget.show()
-                self.video_widget.setFocus()
-                self._toggle_play()
-                return True
+            # клик по превью — запускаем воспроизведение
+            self.video_preview.hide()
+            self.video_widget.show()
+            self.video_widget.setFocus()
+            self._toggle_play()
+            return True
 
         if obj == self.video_widget:
             if event.type() == event.Type.KeyPress:
@@ -1488,6 +1529,7 @@ class NfoEditorWindow(QMainWindow):
         self.video_preview.setText("Нет превью")
         self.video_preview.show()
         self.video_widget.hide()
+
 
 def main():
     app = QApplication(sys.argv)
