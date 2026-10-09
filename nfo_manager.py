@@ -54,6 +54,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QSizePolicy,
+    QSlider,
     QSplitter,
     QStyle,
     QTableWidget,
@@ -585,7 +586,16 @@ class NfoEditorWindow(QMainWindow):
         video_btns.addStretch()
         self.lbl_time = QLabel("00:00 / 00:00")
         self.lbl_time.setStyleSheet("color: palette(mid); font-family: monospace;")
+
         video_btns.addWidget(self.lbl_time)
+        video_btns.addWidget(QLabel("🔊"))
+        self.volume_slider = QSlider(Qt.Orientation.Horizontal)
+        self.volume_slider.setRange(0, 100)
+        self.volume_slider.setValue(100)
+        self.volume_slider.setFixedWidth(100)
+        self.volume_slider.setToolTip("Громкость")
+        self.volume_slider.valueChanged.connect(self._on_volume_changed)
+        video_btns.addWidget(self.volume_slider)
         left_layout.addLayout(video_btns)
 
         self.media_player = QMediaPlayer()
@@ -599,6 +609,10 @@ class NfoEditorWindow(QMainWindow):
         self._slider_pressed = False
 
         return left
+
+    def _on_volume_changed(self, value: int):
+        """Устанавливает громкость (0-100 -> 0.0-1.0)."""
+        self.audio_output.setVolume(value / 100.0)
 
     def _build_list_box(self, title: str, kind: str) -> QWidget:
         box = QWidget()
