@@ -322,6 +322,9 @@ class NfoEditorWindow(QMainWindow):
         self._preview_workers: list[PreviewWorker] = []
         self._current_preview_path: Optional[str] = None
 
+        self._previous_volume = 100
+        self._is_muted = False
+
         self._build_ui()
         self._connect_dirty_signals()
 
@@ -584,11 +587,12 @@ class NfoEditorWindow(QMainWindow):
         video_btns.addWidget(self.btn_play)
         video_btns.addWidget(self.btn_stop)
         video_btns.addStretch()
-        self.lbl_time = QLabel("00:00 / 00:00")
-        self.lbl_time.setStyleSheet("color: palette(mid); font-family: monospace;")
 
-        video_btns.addWidget(self.lbl_time)
-        video_btns.addWidget(QLabel("🔊"))
+        self.lbl_volume = QLabel("🔊")
+        self.lbl_volume.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.lbl_volume.setToolTip("Клик — mute/unmute")
+        self.lbl_volume.installEventFilter(self)
+        video_btns.addWidget(self.lbl_volume)
         self.volume_slider = QSlider(Qt.Orientation.Horizontal)
         self.volume_slider.setRange(0, 100)
         self.volume_slider.setValue(100)
@@ -596,6 +600,11 @@ class NfoEditorWindow(QMainWindow):
         self.volume_slider.setToolTip("Громкость")
         self.volume_slider.valueChanged.connect(self._on_volume_changed)
         video_btns.addWidget(self.volume_slider)
+
+        self.lbl_time = QLabel("00:00 / 00:00")
+        self.lbl_time.setStyleSheet("color: palette(mid); font-family: monospace;")
+        video_btns.addWidget(self.lbl_time)
+
         left_layout.addLayout(video_btns)
 
         self.media_player = QMediaPlayer()
@@ -1480,8 +1489,25 @@ class NfoEditorWindow(QMainWindow):
                 # клик по видео — ставим/снимаем с паузы
                 self._toggle_play()
                 return True
+        if obj == self.lbl_volume and event.type() == event.Type.MouseButtonPress:
+            self._toggle_mute()
+            return True
 
         return super().eventFilter(obj, event)
+
+    def _toggle_mute(self):
+        """Переключает mute/unmute."""
+        if self._is_muted:
+            # снимаем mute — возвращаем предыдущую громкость
+            self.volume_slider.setValue(self._previous_volume)
+            self.lbl_volume.setText("🔊")
+            self._is_muted = False
+        else:
+            # включаем mute — сохраняем текущую громкость и ставим 0
+            self._previous_volume = self.volume_slider.value()
+            self.volume_slider.setValue(0)
+            self.lbl_volume.setText("🔇")
+            self._is_muted = True
 
     def _extract_preview_frame(self, mp4_path: Path):
         """Запускает асинхронное извлечение кадра."""
