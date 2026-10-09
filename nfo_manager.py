@@ -593,7 +593,7 @@ class NfoEditorWindow(QMainWindow):
         self.lbl_volume.setToolTip("Клик — mute/unmute")
         self.lbl_volume.installEventFilter(self)
         video_btns.addWidget(self.lbl_volume)
-        self.volume_slider = QSlider(Qt.Orientation.Horizontal)
+        self.volume_slider = ClickableSlider(Qt.Orientation.Horizontal)
         self.volume_slider.setRange(0, 100)
         self.volume_slider.setValue(100)
         self.volume_slider.setFixedWidth(100)
