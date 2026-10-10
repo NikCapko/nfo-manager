@@ -545,7 +545,6 @@ class NfoEditorWindow(QMainWindow):
         left_layout.addWidget(form, 1)
 
         left_layout.addWidget(self._build_list_box("Студии", "studios"))
-        # left_layout.addWidget(self._build_list_box("Жанры", "genres"))
         left_layout.addWidget(self._build_list_box("Теги", "tags"))
 
         self.video_preview = AspectRatioLabel()
@@ -643,10 +642,10 @@ class NfoEditorWindow(QMainWindow):
             self.list_studios = lst
             btn_add.clicked.connect(self.add_studio)
             btn_remove.clicked.connect(self.remove_studio)
-        # elif kind == "genres":
-        #    self.list_genres = lst
-        #    btn_add.clicked.connect(self.add_genre)
-        #    btn_remove.clicked.connect(self.remove_genre)
+        elif kind == "genres":
+            self.list_genres = lst
+            btn_add.clicked.connect(self.add_genre)
+            btn_remove.clicked.connect(self.remove_genre)
         else:
             self.list_tags = lst
             btn_add.clicked.connect(self.add_tag)
@@ -681,10 +680,12 @@ class NfoEditorWindow(QMainWindow):
         aa.addStretch()
         right_layout.addLayout(aa)
 
+        right_layout.addWidget(self._build_list_box("Жанры", "genres"))
+
         right_layout.addWidget(QLabel("Исходный XML (предпросмотр)"))
         self.raw_xml = QTextEdit()
         self.raw_xml.setReadOnly(True)
-        self.raw_xml.setMinimumHeight(140)
+        self.raw_xml.setMinimumHeight(500)
         right_layout.addWidget(self.raw_xml, 1)
         return right
 
@@ -980,7 +981,7 @@ class NfoEditorWindow(QMainWindow):
             else:
                 widget.setText("")
         self.list_studios.clear()
-        # self.list_genres.clear()
+        self.list_genres.clear()
         self.list_tags.clear()
         self.table_actors.setRowCount(0)
         self.raw_xml.setPlainText("")
@@ -1158,9 +1159,9 @@ class NfoEditorWindow(QMainWindow):
         for s in self.doc.get_studios():
             self.list_studios.addItem(s)
 
-        # self.list_genres.clear()
-        # for g in self.doc.get_genres():
-        #    self.list_genres.addItem(g)
+        self.list_genres.clear()
+        for g in self.doc.get_genres():
+            self.list_genres.addItem(g)
 
         self.list_tags.clear()
         for t in self.doc.get_tags():
@@ -1190,10 +1191,10 @@ class NfoEditorWindow(QMainWindow):
         ]
         self.doc.set_studios(studios)
 
-        # genres = [
-        #    self.list_genres.item(i).text() for i in range(self.list_genres.count())
-        # ]
-        self.doc.set_genres([])
+        genres = [
+            self.list_genres.item(i).text() for i in range(self.list_genres.count())
+        ]
+        self.doc.set_genres(genres)
 
         tags = [self.list_tags.item(i).text() for i in range(self.list_tags.count())]
         self.doc.set_tags(tags)
