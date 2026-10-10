@@ -68,6 +68,7 @@ from PyQt6.QtWidgets import (
 from aspect_ratio_label import AspectRatioLabel
 from clickable_slider import ClickableSlider
 from preview_worker import PreviewWorker
+from video_info_worker import VideoInfoWorker
 
 NAMES = [
     "title",
@@ -322,6 +323,9 @@ class NfoEditorWindow(QMainWindow):
         self._preview_workers: list[PreviewWorker] = []
         self._current_preview_path: Optional[str] = None
 
+        self._video_info_workers: list[VideoInfoWorker] = []
+        self._video_info_cache: dict[str, dict] = {}
+
         self._previous_volume = 100
         self._is_muted = False
 
@@ -334,6 +338,70 @@ class NfoEditorWindow(QMainWindow):
             last = self.history.get("last_folder") or ""
             if last and Path(last).is_dir():
                 self._open_folder(Path(last), autoload_first=True)
+
+    def _load_video_info(self, mp4_path: Path):
+        """Запускает асинхронную загрузку метаданных видео."""
+        mp4_str = str(mp4_path)
+
+        # если уже в кэше — ничего не делаем
+        if mp4_str in self._video_info_cache:
+            return
+
+        # отменяем старые воркеры для этого файла
+        for worker in self._video_info_workers:
+            if str(worker.mp4_path) == mp4_str and worker.isRunning():
+                worker.requestInterruption()
+
+        worker = VideoInfoWorker(mp4_path, self)
+        worker.finished.connect(self._on_video_info_ready)
+        worker.failed.connect(self._on_video_info_failed)
+        worker.finished.connect(lambda: self._remove_video_info_worker(worker))
+        worker.failed.connect(lambda: self._remove_video_info_worker(worker))
+        self._video_info_workers.append(worker)
+        worker.start()
+
+    def _remove_video_info_worker(self, worker: VideoInfoWorker):
+        if worker in self._video_info_workers:
+            self._video_info_workers.remove(worker)
+        worker.deleteLater()
+
+    def _on_video_info_ready(self, video_path: str, info: dict):
+        """Сохраняет метаданные и обновляет tooltip."""
+        self._video_info_cache[video_path] = info
+        # находим элемент в списке и обновляем tooltip
+        for i in range(self.list_files.count()):
+            item = self.list_files.item(i)
+            if item.data(Qt.ItemDataRole.UserRole) == video_path:
+                self._update_item_tooltip(item)
+                break
+        if self.doc.video_path and str(self.doc.video_path) == video_path:
+            self._update_file_info(self.doc.video_path)
+
+    def _update_item_tooltip(self, item: QListWidgetItem):
+        """Обновляет tooltip с метаданными."""
+        path = Path(item.data(Qt.ItemDataRole.UserRole))
+        info = self._video_info_cache.get(str(path), {})
+
+        lines = [str(path)]
+        if info:
+            if "quality" in info:
+                lines.append(f"Качество: {info['quality']}")
+            if "resolution" in info:
+                lines.append(f"Разрешение: {info['resolution']}")
+            if "codec" in info:
+                lines.append(f"Кодек: {info['codec']}")
+            if "duration" in info:
+                mins = int(info["duration"] // 60)
+                secs = int(info["duration"] % 60)
+                lines.append(f"Длительность: {mins}:{secs:02d}")
+            if "size_mb" in info:
+                lines.append(f"Размер: {info['size_mb']:.1f} MB")
+
+        item.setToolTip("\n".join(lines))
+
+    def _on_video_info_failed(self, video_path: str):
+        # можно добавить заглушку в кэш
+        self._video_info_cache[video_path] = {}
 
     def _check_subtitles(self, mp4_path: Path) -> dict:
         """Проверяет наличие субтитров для видео."""
@@ -629,6 +697,49 @@ class NfoEditorWindow(QMainWindow):
 
         return left
 
+    def _update_file_info(self, mp4_path: Path):
+        """Обновляет отображение информации о файле."""
+        if not mp4_path or not mp4_path.exists():
+            self.lbl_file_info.setText("Файл не найден")
+            return
+
+        lines = []
+
+        # имя файла
+        lines.append(f"<b>Файл:</b> {mp4_path.name}")
+
+        # качество и метаданные
+        info = self._video_info_cache.get(str(mp4_path), {})
+        if info:
+            if "quality" in info:
+                lines.append(f"<b>Качество:</b> {info['quality']}")
+            if "resolution" in info:
+                lines.append(f"<b>Разрешение:</b> {info['resolution']}")
+            if "codec" in info:
+                lines.append(f"<b>Кодек:</b> {info['codec']}")
+            if "duration" in info:
+                mins = int(info["duration"] // 60)
+                secs = int(info["duration"] % 60)
+                lines.append(f"<b>Длительность:</b> {mins}:{secs:02d}")
+            if "size_mb" in info:
+                lines.append(f"<b>Размер:</b> {info['size_mb']:.1f} MB")
+        else:
+            lines.append("<i>Загрузка метаданных...</i>")
+
+        # субтитры
+        subs = self._check_subtitles(mp4_path)
+        sub_list = []
+        if subs["en"]:
+            sub_list.append("Английские")
+        if subs["ru"]:
+            sub_list.append("Русские")
+        if sub_list:
+            lines.append(f"<b>Субтитры:</b> {', '.join(sub_list)}")
+        else:
+            lines.append("<b>Субтитры:</b> нет")
+
+        self.lbl_file_info.setText("<br>".join(lines))
+
     def _on_volume_changed(self, value: int):
         """Устанавливает громкость (0-100 -> 0.0-1.0)."""
         self.audio_output.setVolume(value / 100.0)
@@ -696,8 +807,25 @@ class NfoEditorWindow(QMainWindow):
         right_layout.addWidget(QLabel("Исходный XML (предпросмотр)"))
         self.raw_xml = QTextEdit()
         self.raw_xml.setReadOnly(True)
-        self.raw_xml.setMinimumHeight(500)
-        right_layout.addWidget(self.raw_xml, 1)
+        self.raw_xml.setMinimumHeight(300)
+        right_layout.addWidget(self.raw_xml)
+
+        # Информация о файле
+        info_box = QWidget()
+        info_layout = QVBoxLayout()
+        info_layout.setContentsMargins(0, 0, 0, 8)
+        info_box.setLayout(info_layout)
+
+        info_layout.addWidget(QLabel("Информация о файле").setStyleSheet("font-weight: 600;"))
+
+        self.lbl_file_info = QLabel()
+        self.lbl_file_info.setWordWrap(True)
+        self.lbl_file_info.setStyleSheet("background: palette(window); padding: 8px; border-radius: 4px;")
+        self.lbl_file_info.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        info_layout.addWidget(self.lbl_file_info)
+
+        right_layout.addWidget(info_box)
+
         return right
 
     def _connect_dirty_signals(self):
@@ -768,8 +896,9 @@ class NfoEditorWindow(QMainWindow):
         if subs["ru"]:
             sub_marks.append("RU")
 
-        suffix = f" [{', '.join(sub_marks)}] " if sub_marks else ""
-        return prefix + suffix + base
+        sub_suffix = f" [{', '.join(sub_marks)}] " if sub_marks else ""
+
+        return prefix + sub_suffix + base
 
     def _display_name(self, path: Path) -> str:
         if self.current_folder and self.chk_recursive.isChecked():
@@ -882,6 +1011,8 @@ class NfoEditorWindow(QMainWindow):
 
                 item.setForeground(QBrush(color))
             self.list_files.addItem(item)
+            self._update_item_tooltip(item)
+            self._load_video_info(path)
             if select_res is not None and self._paths_equal(path, select_res):
                 select_item = item
 
@@ -984,6 +1115,7 @@ class NfoEditorWindow(QMainWindow):
             self.btn_play.setText("▶")
 
             self.statusBar().showMessage(status, 4000)
+            self._update_file_info(mp4_path)
             return True
         except Exception as e:
             QMessageBox.critical(
@@ -996,6 +1128,7 @@ class NfoEditorWindow(QMainWindow):
     def _clear_editor(self):
         self._loading = True
         self.doc = NfoDocument()
+        self.lbl_file_info.setText("Файл не выбран")
         for name, widget in self.fields.items():
             if isinstance(widget, QTextEdit):
                 widget.setPlainText("")
