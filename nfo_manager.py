@@ -335,6 +335,17 @@ class NfoEditorWindow(QMainWindow):
             if last and Path(last).is_dir():
                 self._open_folder(Path(last), autoload_first=True)
 
+    def _check_subtitles(self, mp4_path: Path) -> dict:
+        """Проверяет наличие субтитров для видео."""
+        base = mp4_path.stem
+        folder = mp4_path.parent
+        subs = {"en": False, "ru": False}
+        if (folder / f"{base}.en.srt").exists():
+            subs["en"] = True
+        if (folder / f"{base}.ru.srt").exists():
+            subs["ru"] = True
+        return subs
+
     def _open_initial_path(self, path: Path):
         try:
             path = path.expanduser().resolve()
@@ -456,7 +467,7 @@ class NfoEditorWindow(QMainWindow):
         header.addWidget(self.lbl_file_count)
         layout.addLayout(header)
 
-        legend = QLabel("● — есть .nfo, ○ — нет")
+        legend = QLabel("● — есть .nfo, ○ — нет, [EN/RU] — субтитры")
         legend.setStyleSheet("color: palette(mid); font-size: 11px;")
         layout.addWidget(legend)
 
@@ -744,11 +755,21 @@ class NfoEditorWindow(QMainWindow):
             item.setText(label)
 
     def _item_label(self, mp4_path: Path) -> str:
-        """Формирует подпись элемента списка с маркером наличия .nfo."""
+        """Формирует подпись элемента списка с маркерами."""
         base = self._display_name(mp4_path)
         nfo_path = mp4_path.with_suffix(".nfo")
         prefix = "● " if nfo_path.exists() else "○ "
-        return prefix + base
+
+        # маркеры субтитров
+        subs = self._check_subtitles(mp4_path)
+        sub_marks = []
+        if subs["en"]:
+            sub_marks.append("EN")
+        if subs["ru"]:
+            sub_marks.append("RU")
+
+        suffix = f" [{', '.join(sub_marks)}] " if sub_marks else ""
+        return prefix + suffix + base
 
     def _display_name(self, path: Path) -> str:
         if self.current_folder and self.chk_recursive.isChecked():
