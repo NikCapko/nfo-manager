@@ -54,7 +54,6 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QSizePolicy,
-    QSlider,
     QSplitter,
     QStyle,
     QTableWidget,
@@ -97,7 +96,6 @@ DEFAULT_HISTORY = {
     "last_folder": "",
     "recursive": False,
 }
-
 
 def load_history() -> dict:
     try:
@@ -898,7 +896,7 @@ class NfoEditorWindow(QMainWindow):
 
         sub_suffix = f" [{', '.join(sub_marks)}] " if sub_marks else ""
 
-        return prefix + sub_suffix + base
+        return prefix + base
 
     def _display_name(self, path: Path) -> str:
         if self.current_folder and self.chk_recursive.isChecked():
@@ -1012,7 +1010,6 @@ class NfoEditorWindow(QMainWindow):
                 item.setForeground(QBrush(color))
             self.list_files.addItem(item)
             self._update_item_tooltip(item)
-            self._load_video_info(path)
             if select_res is not None and self._paths_equal(path, select_res):
                 select_item = item
 
@@ -1116,6 +1113,7 @@ class NfoEditorWindow(QMainWindow):
 
             self.statusBar().showMessage(status, 4000)
             self._update_file_info(mp4_path)
+            self._load_video_info(mp4_path)
             return True
         except Exception as e:
             QMessageBox.critical(
