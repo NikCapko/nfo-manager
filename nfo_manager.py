@@ -97,6 +97,7 @@ DEFAULT_HISTORY = {
     "recursive": False,
 }
 
+
 def load_history() -> dict:
     try:
         if HISTORY_PATH.exists():
@@ -558,7 +559,8 @@ class NfoEditorWindow(QMainWindow):
         )
         self.list_files.setUniformItemSizes(True)
         self.list_files.currentItemChanged.connect(self._on_file_current_changed)
-        self.list_files.itemDoubleClicked.connect(self._on_file_double_clicked)
+        self.list_files.itemClicked.connect(self._on_file_double_clicked)
+        self.list_files.itemDoubleClicked.connect(self.browse_original_file)
         layout.addWidget(self.list_files, 1)
 
         self.chk_recursive = QCheckBox("Включая подпапки")
@@ -814,12 +816,18 @@ class NfoEditorWindow(QMainWindow):
         info_layout.setContentsMargins(0, 0, 0, 8)
         info_box.setLayout(info_layout)
 
-        info_layout.addWidget(QLabel("Информация о файле").setStyleSheet("font-weight: 600;"))
+        info_layout.addWidget(
+            QLabel("Информация о файле").setStyleSheet("font-weight: 600;")
+        )
 
         self.lbl_file_info = QLabel()
         self.lbl_file_info.setWordWrap(True)
-        self.lbl_file_info.setStyleSheet("background: palette(window); padding: 8px; border-radius: 4px;")
-        self.lbl_file_info.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.lbl_file_info.setStyleSheet(
+            "background: palette(window); padding: 8px; border-radius: 4px;"
+        )
+        self.lbl_file_info.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
         info_layout.addWidget(self.lbl_file_info)
 
         right_layout.addWidget(info_box)
@@ -1514,6 +1522,12 @@ class NfoEditorWindow(QMainWindow):
             self.media_player.play()
             self.btn_play.setText("❚❚")
 
+    def _pause_video(self):
+        self.video_preview.hide()
+        self.video_widget.show()
+        self.media_player.pause()
+        self.btn_play.setText("▶")
+
     def _stop_video(self):
         self.video_preview.hide()
         self.video_widget.show()
@@ -1641,6 +1655,10 @@ class NfoEditorWindow(QMainWindow):
             if event.type() == event.Type.MouseButtonPress:
                 # клик по видео — ставим/снимаем с паузы
                 self._toggle_play()
+                return True
+            elif event.type() == event.Type.MouseButtonDblClick:
+                self._pause_video()
+                self.browse_original_file()
                 return True
         if obj == self.lbl_volume and event.type() == event.Type.MouseButtonPress:
             self._toggle_mute()
