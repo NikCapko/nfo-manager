@@ -1228,7 +1228,14 @@ class NfoEditorWindow(QMainWindow):
             elif os.name == "nt":
                 os.startfile(str(target))  # type: ignore[attr-defined]
             else:
-                for cmd in (["mpv", str(target)], ["xdg-open", str(target)]):
+                for cmd in (
+                    [
+                        "mpv",
+                        "--start=" + str(self.media_player.position() / 1000),
+                        str(target),
+                    ],
+                    ["xdg-open", str(target)],
+                ):
                     try:
                         subprocess.Popen(cmd)
                         break
