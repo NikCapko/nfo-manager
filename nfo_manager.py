@@ -27,6 +27,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Optional
 
+from PyQt6 import QtGui
 from PyQt6.QtCore import Qt, QUrl
 from PyQt6.QtGui import (
     QAction,
@@ -95,6 +96,7 @@ DEFAULT_HISTORY = {
     "actors": [],  # list of {"name": "...", "role": "..."}
     "last_folder": "",
     "recursive": False,
+    "theme": "light",
 }
 
 
@@ -328,6 +330,7 @@ class NfoEditorWindow(QMainWindow):
         self._previous_volume = 100
         self._is_muted = False
 
+        self._apply_theme(self.history.get("theme", "light"))
         self._build_ui()
         self._connect_dirty_signals()
 
@@ -337,6 +340,91 @@ class NfoEditorWindow(QMainWindow):
             last = self.history.get("last_folder") or ""
             if last and Path(last).is_dir():
                 self._open_folder(Path(last), autoload_first=True)
+
+    def _apply_theme(self, theme: str):
+        """Применяет светлую или тёмную тему."""
+        app = QApplication.instance()
+        if theme == "dark":
+            self._apply_dark_theme(app)
+        else:
+            self._apply_light_theme(app)
+        self.history["theme"] = theme
+        save_history(self.history)
+
+    def _apply_dark_theme(self, app):
+        """Тёмная тема."""
+        palette = app.palette()
+        palette.setColor(
+            palette.ColorGroup.All, palette.ColorRole.Window, QtGui.QColor(53, 53, 53)
+        )
+        palette.setColor(
+            palette.ColorGroup.All,
+            palette.ColorRole.WindowText,
+            QtGui.QColor(255, 255, 255),
+        )
+        palette.setColor(
+            palette.ColorGroup.All, palette.ColorRole.Base, QtGui.QColor(35, 35, 35)
+        )
+        palette.setColor(
+            palette.ColorGroup.All,
+            palette.ColorRole.AlternateBase,
+            QtGui.QColor(53, 53, 53),
+        )
+        palette.setColor(
+            palette.ColorGroup.All,
+            palette.ColorRole.ToolTipBase,
+            QtGui.QColor(25, 25, 25),
+        )
+        palette.setColor(
+            palette.ColorGroup.All,
+            palette.ColorRole.ToolTipText,
+            QtGui.QColor(255, 255, 255),
+        )
+        palette.setColor(
+            palette.ColorGroup.All, palette.ColorRole.Text, QtGui.QColor(255, 255, 255)
+        )
+        palette.setColor(
+            palette.ColorGroup.All, palette.ColorRole.Button, QtGui.QColor(53, 53, 53)
+        )
+        palette.setColor(
+            palette.ColorGroup.All,
+            palette.ColorRole.ButtonText,
+            QtGui.QColor(255, 255, 255),
+        )
+        palette.setColor(
+            palette.ColorGroup.All,
+            palette.ColorRole.BrightText,
+            QtGui.QColor(255, 51, 51),
+        )
+        palette.setColor(
+            palette.ColorGroup.All, palette.ColorRole.Link, QtGui.QColor(42, 130, 218)
+        )
+        palette.setColor(
+            palette.ColorGroup.All,
+            palette.ColorRole.Highlight,
+            QtGui.QColor(42, 130, 218),
+        )
+        palette.setColor(
+            palette.ColorGroup.All,
+            palette.ColorRole.HighlightedText,
+            QtGui.QColor(35, 35, 35),
+        )
+        app.setPalette(palette)
+        app.setStyleSheet(
+            "QToolTip { color: #ffffff; background-color: #2a82da; border: 1px solid white; }"
+        )
+
+    def _apply_light_theme(self, app):
+        """Светлая тема (стандартная)."""
+        app.setPalette(app.style().standardPalette())
+        app.setStyleSheet("")
+
+    def _toggle_theme(self):
+        """Переключает тему."""
+        current = self.history.get("theme", "light")
+        new_theme = "dark" if current == "light" else "light"
+        self._apply_theme(new_theme)
+        self.act_theme.setText("🌙" if new_theme == "dark" else "☀️")
 
     def _load_video_info(self, mp4_path: Path):
         """Запускает асинхронную загрузку метаданных видео."""
@@ -516,6 +604,13 @@ class NfoEditorWindow(QMainWindow):
         act_refresh.setToolTip("Обновить список файлов (F5)")
         act_refresh.triggered.connect(self.refresh_file_list)
         tb.addAction(act_refresh)
+
+        tb.addSeparator()
+
+        self.act_theme = QAction("☀️", self)
+        self.act_theme.setToolTip("Переключить тему")
+        self.act_theme.triggered.connect(self._toggle_theme)
+        tb.addAction(self.act_theme)
 
     def _build_file_panel(self) -> QWidget:
         panel = QWidget()
