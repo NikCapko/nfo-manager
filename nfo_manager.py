@@ -43,6 +43,7 @@ from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QCheckBox,
+    QDialog,
     QFileDialog,
     QHBoxLayout,
     QHeaderView,
@@ -68,6 +69,7 @@ from PyQt6.QtWidgets import (
 from aspect_ratio_label import AspectRatioLabel
 from clickable_slider import ClickableSlider
 from preview_worker import PreviewWorker
+from templates_dialog import TemplatesDialog
 from video_info_worker import VideoInfoWorker
 
 NAMES = [
@@ -97,6 +99,7 @@ DEFAULT_HISTORY = {
     "last_folder": "",
     "recursive": False,
     "theme": "light",
+    "templates": {},  # {"Имя шаблона": {"genres": [], "tags": [], "studios": []}}
 }
 
 
@@ -604,6 +607,13 @@ class NfoEditorWindow(QMainWindow):
         act_refresh.setToolTip("Обновить список файлов (F5)")
         act_refresh.triggered.connect(self.refresh_file_list)
         tb.addAction(act_refresh)
+
+        act_templates = QAction("📋 Шаблоны", self)
+        act_templates.setToolTip("Шаблоны метаданных")
+        act_templates.triggered.connect(self.open_templates_dialog)
+        tb.addAction(act_templates)
+
+        tb.addSeparator()
 
         tb.addSeparator()
 
@@ -1892,6 +1902,86 @@ class NfoEditorWindow(QMainWindow):
         self.video_preview.setText("Нет превью")
         self.video_preview.show()
         self.video_widget.hide()
+
+    def _get_current_metadata(self) -> dict:
+        """Возвращает текущие жанры/теги/студии из формы."""
+        return {
+            "genres": [
+                self.list_genres.item(i).text() for i in range(self.list_genres.count())
+            ],
+            "tags": [
+                self.list_tags.item(i).text() for i in range(self.list_tags.count())
+            ],
+            "studios": [
+                self.list_studios.item(i).text()
+                for i in range(self.list_studios.count())
+            ],
+        }
+
+    def _on_templates_changed(self, templates: dict):
+        """Обновляет историю при изменении шаблонов в диалоге."""
+        self.history["templates"] = templates
+        save_history(self.history)
+
+    def _apply_template(self, name: str):
+        """Применяет шаблон к текущему документу."""
+        tpl = self.history.get("templates", {}).get(name)
+        if not tpl:
+            return
+
+        # спрашиваем режим: заменить или добавить
+        box = QMessageBox(self)
+        box.setWindowTitle("Применить шаблон")
+        box.setText(f"Как применить шаблон «{name}»?")
+        btn_replace = box.addButton("Заменить", QMessageBox.ButtonRole.AcceptRole)
+        btn_add = box.addButton("Добавить к текущим", QMessageBox.ButtonRole.YesRole)
+        btn_cancel = box.addButton("Отмена", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(btn_replace)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is btn_cancel:
+            return
+        mode = "replace" if clicked is btn_replace else "add"
+
+        # жанры
+        if mode == "replace":
+            self.list_genres.clear()
+        existing_genres = {
+            self.list_genres.item(i).text() for i in range(self.list_genres.count())
+        }
+        for g in tpl.get("genres", []):
+            if g and g not in existing_genres:
+                self.list_genres.addItem(g)
+
+        # теги
+        if mode == "replace":
+            self.list_tags.clear()
+        existing_tags = {
+            self.list_tags.item(i).text() for i in range(self.list_tags.count())
+        }
+        for t in tpl.get("tags", []):
+            if t and t not in existing_tags:
+                self.list_tags.addItem(t)
+
+        # студии
+        if mode == "replace":
+            self.list_studios.clear()
+        existing_studios = {
+            self.list_studios.item(i).text() for i in range(self.list_studios.count())
+        }
+        for s in tpl.get("studios", []):
+            if s and s not in existing_studios:
+                self.list_studios.addItem(s)
+
+        self._mark_dirty()
+        self.statusBar().showMessage(f"Шаблон «{name}» применён", 3000)
+
+    def open_templates_dialog(self):
+        """Открывает диалог шаблонов и применяет выбранный."""
+        dlg = TemplatesDialog(self.history.get("templates", {}), self)
+        if dlg.exec() == QDialog.DialogCode.Accepted and dlg.result_template:
+            print("accept")
+            self._apply_template(dlg.result_template)
 
 
 def main():
