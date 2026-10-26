@@ -975,6 +975,8 @@ class NfoEditorWindow(QMainWindow):
                 widget.textChanged.connect(self._mark_dirty)
             else:
                 widget.textChanged.connect(self._mark_dirty)
+            if isinstance(widget, QLineEdit):
+                widget.textChanged.connect(self._validate_fields)
 
     def _mark_dirty(self, *_args):
         if self._loading:
@@ -1234,6 +1236,7 @@ class NfoEditorWindow(QMainWindow):
             else:
                 self.doc.new_empty(mp4_path)
             self._populate_from_doc()
+            self._validate_fields()
 
             # проверяем совпадение original_filename с именем видео
             if self.doc.video_path:
@@ -1426,6 +1429,20 @@ class NfoEditorWindow(QMainWindow):
         if not self.doc.path:
             return self.save_file_as()
         try:
+            errors = self._validate_fields()
+            if errors:
+                box = QMessageBox(self)
+                box.setWindowTitle("Предупреждение")
+                box.setText("Обнаружены проблемы с полями:")
+                box.setInformativeText("\n".join(f"• {e}" for e in errors))
+                box.setIcon(QMessageBox.Icon.Warning)
+                box.setStandardButtons(
+                    QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Cancel
+                )
+                box.setDefaultButton(QMessageBox.StandardButton.Cancel)
+                if box.exec() != QMessageBox.StandardButton.Save:
+                    return False
+
             self._update_doc_from_ui()
             self.doc.save()
             self._dirty = False
@@ -1982,6 +1999,52 @@ class NfoEditorWindow(QMainWindow):
         if dlg.exec() == QDialog.DialogCode.Accepted and dlg.result_template:
             print("accept")
             self._apply_template(dlg.result_template)
+
+    def _validate_fields(self):
+        """Проверяет корректность полей и подсвечивает ошибки."""
+        errors = []
+
+        # проверка года
+        year_widget = self.fields["year"]
+        year_text = year_widget.text().strip()
+        if year_text:
+            if not year_text.isdigit() or len(year_text) != 4:
+                year_widget.setStyleSheet("background: #ffcccc; color: #000000;")  # красный фон
+                errors.append("Год должен быть 4 цифры")
+            else:
+                year = int(year_text)
+                if year < 1888 or year > 2100:  # разумный диапазон
+                    year_widget.setStyleSheet("background: #ffcccc; color: #000000;")
+                    errors.append("Год вне разумного диапазона (1888-2100)")
+                else:
+                    year_widget.setStyleSheet("")
+        else:
+            year_widget.setStyleSheet("")
+
+        # проверка title (обязательное)
+        title_widget = self.fields["title"]
+        title_text = title_widget.text().strip()
+        if not title_text:
+            title_widget.setStyleSheet("background: #fff3cd; color: #000000;")  # жёлтый фон
+            errors.append("Title не заполнен")
+        else:
+            title_widget.setStyleSheet("")
+
+        # проверка original_filename (обязательное)
+        filename_widget = self.fields["original_filename"]
+        filename_text = filename_widget.text().strip()
+        if not filename_text:
+            filename_widget.setStyleSheet("background: #fff3cd; color: #000000;")
+            errors.append("Original filename не заполнен")
+        else:
+            # проверяем совпадение с именем видео
+            if self.doc.video_path and filename_text != self.doc.video_path.name:
+                filename_widget.setStyleSheet("background: #ffcccc; color: #000000;")
+                errors.append("Original filename не совпадает с именем видео")
+            else:
+                filename_widget.setStyleSheet("")
+
+        return errors
 
 
 def main():
