@@ -1236,8 +1236,11 @@ class NfoEditorWindow(QMainWindow):
                     )
                 if current_filename and current_filename != expected_filename:
                     self.fields["original_filename"].setStyleSheet(
-                        "background: #fff3cd;"
-                    )  # жёлтый фон
+                        """
+                            background: #fff3cd;
+                            color: #000000;
+                        """
+                    )
                 else:
                     self.fields["original_filename"].setStyleSheet("")
 
