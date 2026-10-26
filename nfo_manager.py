@@ -702,9 +702,25 @@ class NfoEditorWindow(QMainWindow):
                 widget = QLineEdit()
                 row = QVBoxLayout()
                 row.addWidget(lbl)
-                if name == "original_filename":
+                if name == "title":
                     h = QHBoxLayout()
                     h.addWidget(widget)
+                    btn_fill_title = QPushButton("⟲")
+                    btn_fill_title.setFixedWidth(30)
+                    btn_fill_title.setToolTip(
+                        "Автозаполнить именем файла (без расширения)"
+                    )
+                    btn_fill_title.clicked.connect(self._fill_title_from_filename)
+                    h.addWidget(btn_fill_title)
+                    row.addLayout(h)
+                elif name == "original_filename":
+                    h = QHBoxLayout()
+                    h.addWidget(widget)
+                    btn_fill = QPushButton("⟲")
+                    btn_fill.setFixedWidth(30)
+                    btn_fill.setToolTip("Автозаполнить именем видео")
+                    btn_fill.clicked.connect(self._fill_original_filename)
+                    h.addWidget(btn_fill)
                     btn_browse = QPushButton("▶")
                     btn_browse.setFixedWidth(30)
                     btn_browse.setToolTip("Открыть медиафайл")
@@ -791,6 +807,20 @@ class NfoEditorWindow(QMainWindow):
         self._slider_pressed = False
 
         return left
+
+    def _fill_title_from_filename(self):
+        """Заполняет поле title именем видео без расширения."""
+        if self.doc.video_path:
+            title = self.doc.video_path.stem
+            self.fields["title"].setText(title)
+            self._mark_dirty()
+
+    def _fill_original_filename(self):
+        """Заполняет поле original_filename именем текущего видео."""
+        if self.doc.video_path:
+            self.fields["original_filename"].setText(self.doc.video_path.name)
+            self._mark_dirty()
+            self.fields["original_filename"].setStyleSheet("")
 
     def _update_file_info(self, mp4_path: Path):
         """Обновляет отображение информации о файле."""
@@ -1194,6 +1224,23 @@ class NfoEditorWindow(QMainWindow):
             else:
                 self.doc.new_empty(mp4_path)
             self._populate_from_doc()
+
+            # проверяем совпадение original_filename с именем видео
+            if self.doc.video_path:
+                current_filename = self.fields["original_filename"].text().strip()
+                expected_filename = self.doc.video_path.name
+                if current_filename and current_filename != expected_filename:
+                    self.statusBar().showMessage(
+                        f"⚠ original_filename не совпадает с именем видео: {current_filename} ≠ {expected_filename}",
+                        5000,
+                    )
+                if current_filename and current_filename != expected_filename:
+                    self.fields["original_filename"].setStyleSheet(
+                        "background: #fff3cd;"
+                    )  # жёлтый фон
+                else:
+                    self.fields["original_filename"].setStyleSheet("")
+
             self._dirty = False
             self._update_title()
             self._reselect_current_doc()
