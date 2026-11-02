@@ -502,6 +502,10 @@ class NfoEditorWindow(QMainWindow):
             subs["en"] = True
         if (folder / f"{base}.ru.srt").exists():
             subs["ru"] = True
+        if (folder / f"{base}.srt").exists():
+            subs["ru"] = True
+        if (folder / f"{base}.ass").exists():
+            subs["ru"] = True
         return subs
 
     def _open_initial_path(self, path: Path):
@@ -608,12 +612,12 @@ class NfoEditorWindow(QMainWindow):
         act_refresh.triggered.connect(self.refresh_file_list)
         tb.addAction(act_refresh)
 
+        tb.addSeparator()
+
         act_templates = QAction("📋 Шаблоны", self)
         act_templates.setToolTip("Шаблоны метаданных")
         act_templates.triggered.connect(self.open_templates_dialog)
         tb.addAction(act_templates)
-
-        tb.addSeparator()
 
         tb.addSeparator()
 
