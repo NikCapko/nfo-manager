@@ -681,6 +681,9 @@ class NfoEditorWindow(QMainWindow):
         self.list_files.itemDoubleClicked.connect(self.browse_original_file)
         layout.addWidget(self.list_files, 1)
 
+        self.list_files.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.list_files.customContextMenuRequested.connect(self._show_file_context_menu)
+
         self.chk_recursive = QCheckBox("Включая подпапки")
         self.chk_recursive.setChecked(bool(self.history.get("recursive")))
         self.chk_recursive.toggled.connect(self._on_recursive_toggled)
@@ -696,6 +699,85 @@ class NfoEditorWindow(QMainWindow):
         layout.addLayout(btns)
 
         return panel
+
+    def _show_file_context_menu(self, position):
+        """Показывает контекстное меню для элемента списка."""
+        item = self.list_files.itemAt(position)
+        if item is None:
+            return
+
+        from PyQt6.QtWidgets import QMenu
+        menu = QMenu(self)
+        act_rename = menu.addAction("Переименовать")
+        act_rename.triggered.connect(lambda: self._rename_file(item))
+
+        menu.exec(self.list_files.mapToGlobal(position))
+
+    def _rename_file(self, item: QListWidgetItem):
+        """Переименовывает видеофайл и связанные файлы."""
+        mp4_path = Path(item.data(Qt.ItemDataRole.UserRole))
+        if not mp4_path.exists():
+            QMessageBox.warning(self, "Ошибка", f"Файл не найден:\n{mp4_path}")
+            return
+
+        # диалог ввода нового имени
+        new_name, ok = QInputDialog.getText(
+            self,
+            "Переименовать",
+            "Новое имя файла:",
+            text=mp4_path.name,
+        )
+        if not ok or not new_name.strip():
+            return
+
+        new_name = new_name.strip()
+        if not new_name.lower().endswith(".mp4"):
+            new_name += ".mp4"
+
+        if new_name == mp4_path.name:
+            return
+
+        new_path = mp4_path.parent / new_name
+        if new_path.exists():
+            QMessageBox.warning(
+                self, "Ошибка", f"Файл с таким именем уже существует:\n{new_path}"
+            )
+            return
+
+        # собираем все связанные файлы
+        base = mp4_path.stem
+        new_base = new_path.stem
+        files_to_rename = [
+            (mp4_path, new_path),
+            (mp4_path.with_suffix(".nfo"), new_path.with_suffix(".nfo")),
+            (mp4_path.parent / f"{base}.en.srt", new_path.parent / f"{new_base}.en.srt"),
+            (mp4_path.parent / f"{base}.ru.srt", new_path.parent / f"{new_base}.ru.srt"),
+            (mp4_path.parent / f"{base}.srt", new_path.parent / f"{new_base}.srt"),
+            (mp4_path.parent / f"{base}.ass", new_path.parent / f"{new_base}.ass"),
+        ]
+
+        # переименовываем
+        renamed = []
+        try:
+            for old, new in files_to_rename:
+                if old.exists():
+                    old.rename(new)
+                    renamed.append((old, new))
+        except Exception as e:
+            # откатываем изменения при ошибке
+            for old, new in reversed(renamed):
+                try:
+                    new.rename(old)
+                except Exception:
+                    pass
+            QMessageBox.critical(
+                self, "Ошибка", f"Не удалось переименовать файл:\n{e}"
+            )
+            return
+
+        # обновляем список
+        self._scan_and_fill(select=new_path)
+        self.statusBar().showMessage(f"Переименовано: {new_path.name}", 3000)
 
     def _build_form_panel(self) -> QWidget:
         left = QWidget()
