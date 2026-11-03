@@ -69,6 +69,7 @@ from PyQt6.QtWidgets import (
 from aspect_ratio_label import AspectRatioLabel
 from clickable_slider import ClickableSlider
 from preview_worker import PreviewWorker
+from settings_dialog import SettingsDialog
 from templates_dialog import TemplatesDialog
 from video_info_worker import VideoInfoWorker
 
@@ -100,6 +101,7 @@ DEFAULT_HISTORY = {
     "recursive": False,
     "theme": "light",
     "templates": {},  # {"Имя шаблона": {"genres": [], "tags": [], "studios": []}}
+    "show_preview": True,
 }
 
 
@@ -618,6 +620,13 @@ class NfoEditorWindow(QMainWindow):
         act_templates.setToolTip("Шаблоны метаданных")
         act_templates.triggered.connect(self.open_templates_dialog)
         tb.addAction(act_templates)
+
+        tb.addSeparator()
+
+        act_settings = QAction("⚙", self)
+        act_settings.setToolTip("Настройки")
+        act_settings.triggered.connect(self.open_settings_dialog)
+        tb.addAction(act_settings)
 
         tb.addSeparator()
 
@@ -1274,7 +1283,12 @@ class NfoEditorWindow(QMainWindow):
             # загружаем видео в плеер
             self.media_player.stop()
             self.media_player.setSource(QUrl.fromLocalFile(str(mp4_path)))
-            self._extract_preview_frame(mp4_path)
+            if self.history.get("show_preview", True):
+                self._extract_preview_frame(mp4_path)
+            else:
+                # превью отключено — сразу показываем плеер
+                self.video_preview.hide()
+                self.video_widget.show()
             self.video_slider.setEnabled(False)
             self.video_slider.setValue(0)
             self._video_duration = 0
@@ -1865,6 +1879,10 @@ class NfoEditorWindow(QMainWindow):
 
     def _extract_preview_frame(self, mp4_path: Path):
         """Запускает асинхронное извлечение кадра."""
+        if not self.history.get("show_preview", True):
+            self.video_preview.hide()
+            self.video_widget.show()
+            return
         mp4_str = str(mp4_path)
         self._current_preview_path = mp4_str
 
@@ -2013,7 +2031,9 @@ class NfoEditorWindow(QMainWindow):
         year_text = year_widget.text().strip()
         if year_text:
             if not year_text.isdigit() or len(year_text) != 4:
-                year_widget.setStyleSheet("background: #ffcccc; color: #000000;")  # красный фон
+                year_widget.setStyleSheet(
+                    "background: #ffcccc; color: #000000;"
+                )  # красный фон
                 errors.append("Год должен быть 4 цифры")
             else:
                 year = int(year_text)
@@ -2029,7 +2049,9 @@ class NfoEditorWindow(QMainWindow):
         title_widget = self.fields["title"]
         title_text = title_widget.text().strip()
         if not title_text:
-            title_widget.setStyleSheet("background: #fff3cd; color: #000000;")  # жёлтый фон
+            title_widget.setStyleSheet(
+                "background: #fff3cd; color: #000000;"
+            )  # жёлтый фон
             errors.append("Title не заполнен")
         else:
             title_widget.setStyleSheet("")
@@ -2049,6 +2071,14 @@ class NfoEditorWindow(QMainWindow):
                 filename_widget.setStyleSheet("")
 
         return errors
+
+    def open_settings_dialog(self):
+        """Открывает диалог настроек и применяет изменения."""
+        dlg = SettingsDialog(self.history, self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self.history.update(dlg.settings)
+            save_history(self.history)
+            self.statusBar().showMessage("Настройки сохранены", 2000)
 
 
 def main():
