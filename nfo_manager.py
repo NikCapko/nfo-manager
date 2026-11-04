@@ -517,7 +517,17 @@ class NfoEditorWindow(QMainWindow):
             subs["ru"] = True
         if (folder / f"{base}.srt").exists():
             subs["ru"] = True
+        if (folder / f"{base}.en.ass").exists():
+            subs["en"] = True
+        if (folder / f"{base}.ru.ass").exists():
+            subs["ru"] = True
         if (folder / f"{base}.ass").exists():
+            subs["ru"] = True
+        if (folder / f"{base}.en.vtt").exists():
+            subs["en"] = True
+        if (folder / f"{base}.ru.vtt").exists():
+            subs["ru"] = True
+        if (folder / f"{base}.vtt").exists():
             subs["ru"] = True
         return subs
 
