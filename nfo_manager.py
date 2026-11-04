@@ -313,8 +313,9 @@ class NfoDocument:
 
 # --- Main window ------------------------------------------------------------
 class NfoEditorWindow(QMainWindow):
-    def __init__(self, initial_path: Optional[str] = None):
+    def __init__(self, initial_path: Optional[str] = None, single_mode: bool = False):
         super().__init__()
+        self._single_mode = single_mode
         self.setWindowTitle("NFO Editor")
         self.resize(1200, 740)
         self.setAcceptDrops(True)
@@ -342,9 +343,13 @@ class NfoEditorWindow(QMainWindow):
         if initial_path:
             self._open_initial_path(Path(initial_path))
         else:
-            last = self.history.get("last_folder") or ""
-            if last and Path(last).is_dir():
-                self._open_folder(Path(last), autoload_first=True)
+            if self._single_mode:
+                # в single_mode без аргументов — просто показываем пустое окно
+                self._clear_editor()
+            else:
+                last = self.history.get("last_folder") or ""
+                if last and Path(last).is_dir():
+                    self._open_folder(Path(last), autoload_first=True)
 
     def _apply_theme(self, theme: str):
         """Применяет светлую или тёмную тему."""
@@ -460,14 +465,20 @@ class NfoEditorWindow(QMainWindow):
     def _on_video_info_ready(self, video_path: str, info: dict):
         """Сохраняет метаданные и обновляет tooltip."""
         self._video_info_cache[video_path] = info
-        # находим элемент в списке и обновляем tooltip
-        for i in range(self.list_files.count()):
-            item = self.list_files.item(i)
-            if item.data(Qt.ItemDataRole.UserRole) == video_path:
-                self._update_item_tooltip(item)
-                break
+
+        # обновляем информацию в форме, если это текущее видео
         if self.doc.video_path and str(self.doc.video_path) == video_path:
             self._update_file_info(self.doc.video_path)
+
+        # обновляем tooltip в списке (если список существует)
+        if hasattr(self, "list_files"):
+            for i in range(self.list_files.count()):
+                item = self.list_files.item(i)
+                if item.data(Qt.ItemDataRole.UserRole) == video_path:
+                    self._update_item_tooltip(item)
+                    # обновляем label с качеством
+                    item.setText(self._item_label(Path(video_path)))
+                    break
 
     def _update_item_tooltip(self, item: QListWidgetItem):
         """Обновляет tooltip с метаданными."""
@@ -515,28 +526,121 @@ class NfoEditorWindow(QMainWindow):
             path = path.expanduser().resolve()
         except Exception:
             path = path.expanduser()
+
+        if self._single_mode:
+            # в single_mode работаем только с файлами
+            if path.is_dir():
+                QMessageBox.warning(
+                    self,
+                    "Упрощённый режим",
+                    "В режиме --single нужно указать путь к .nfo или .mp4 файлу, а не к папке.",
+                )
+                return
+            suffix = path.suffix.lower()
+            if suffix == ".mp4":
+                nfo = path.with_suffix(".nfo")
+                if nfo.exists():
+                    self._loading = True
+                    try:
+                        self.doc.load(nfo)
+                        self.doc.video_path = path
+                        self._populate_from_doc()
+                        self._dirty = False
+                        self._update_title()
+                        self.media_player.stop()
+                        from PyQt6.QtCore import QUrl
+
+                        self.media_player.setSource(QUrl.fromLocalFile(str(path)))
+                        if self.history.get("show_preview", True):
+                            self._extract_preview_frame(path)
+                        else:
+                            self.video_preview.hide()
+                            self.video_widget.show()
+                        self._load_video_info(path)
+                        self._update_file_info(path)
+                        self._validate_fields()
+                    except Exception as e:
+                        QMessageBox.critical(
+                            self, "Ошибка", f"Не удалось открыть:\n{e}"
+                        )
+                    finally:
+                        self._loading = False
+                else:
+                    # нет nfo — создаём пустой документ
+                    self._loading = True
+                    self.doc.new_empty(path)
+                    self._populate_from_doc()
+                    self._dirty = False
+                    self._update_title()
+                    self.media_player.stop()
+                    from PyQt6.QtCore import QUrl
+
+                    self.media_player.setSource(QUrl.fromLocalFile(str(path)))
+                    if self.history.get("show_preview", True):
+                        self._extract_preview_frame(path)
+                    else:
+                        self.video_preview.hide()
+                        self.video_widget.show()
+                    self._load_video_info(path)
+                    self._update_file_info(path)
+                    self._validate_fields()
+                    self._loading = False
+            elif suffix == ".nfo":
+                mp4 = path.with_suffix(".mp4")
+                self._loading = True
+                try:
+                    self.doc.load(path)
+                    self.doc.video_path = mp4 if mp4.exists() else None
+                    self._populate_from_doc()
+                    self._dirty = False
+                    self._update_title()
+                    if self.doc.video_path:
+                        self.media_player.stop()
+                        from PyQt6.QtCore import QUrl
+
+                        self.media_player.setSource(
+                            QUrl.fromLocalFile(str(self.doc.video_path))
+                        )
+                        if self.history.get("show_preview", True):
+                            self._extract_preview_frame(self.doc.video_path)
+                        else:
+                            self.video_preview.hide()
+                            self.video_widget.show()
+                        self._load_video_info(self.doc.video_path)
+                        self._update_file_info(self.doc.video_path)
+                    self._validate_fields()
+                except Exception as e:
+                    QMessageBox.critical(self, "Ошибка", f"Не удалось открыть:\n{e}")
+                finally:
+                    self._loading = False
+            else:
+                QMessageBox.warning(
+                    self, "Упрощённый режим", f"Неподдерживаемый тип файла: {suffix}"
+                )
+            return
+
+        # обычный режим
         if path.is_dir():
             self._open_folder(path, autoload_first=True)
             return
         suffix = path.suffix.lower()
         if suffix == ".nfo":
-            # ищем соответствующий mp4
             mp4 = path.with_suffix(".mp4")
             if mp4.exists():
                 self._open_folder(path.parent, select=mp4)
             else:
-                # mp4 нет — просто открываем папку
                 self._open_folder(path.parent, autoload_first=True)
             return
         if suffix == ".mp4":
             self._open_folder(path.parent, select=path)
             return
-        # другой файл — открываем его папку
         self._open_folder(path.parent, autoload_first=True)
 
     def _build_ui(self):
         self._build_toolbar()
-        self.statusBar().showMessage("Откройте папку с видео")
+        self.statusBar().showMessage(
+            "Откройте .nfo файл" if self._single_mode else "Откройте папку с видео"
+        )
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -544,23 +648,33 @@ class NfoEditorWindow(QMainWindow):
         main_layout.setContentsMargins(8, 8, 8, 8)
         central.setLayout(main_layout)
 
-        outer = QSplitter(Qt.Orientation.Horizontal)
-        main_layout.addWidget(outer)
+        if self._single_mode:
+            # упрощённый режим: только форма + правая панель
+            inner = QSplitter(Qt.Orientation.Horizontal)
+            inner.addWidget(self._build_form_panel())
+            inner.addWidget(self._build_actors_panel())
+            inner.setSizes([480, 460])
+            inner.setStretchFactor(0, 1)
+            inner.setStretchFactor(1, 1)
+            main_layout.addWidget(inner)
+        else:
+            # полный режим
+            outer = QSplitter(Qt.Orientation.Horizontal)
+            main_layout.addWidget(outer)
+            outer.addWidget(self._build_file_panel())
 
-        outer.addWidget(self._build_file_panel())
+            inner = QSplitter(Qt.Orientation.Horizontal)
+            inner.addWidget(self._build_form_panel())
+            inner.addWidget(self._build_actors_panel())
+            inner.setSizes([480, 460])
+            inner.setStretchFactor(0, 1)
+            inner.setStretchFactor(1, 1)
 
-        inner = QSplitter(Qt.Orientation.Horizontal)
-        inner.addWidget(self._build_form_panel())
-        inner.addWidget(self._build_actors_panel())
-        inner.setSizes([480, 460])
-        inner.setStretchFactor(0, 1)
-        inner.setStretchFactor(1, 1)
-
-        outer.addWidget(inner)
-        outer.setSizes([280, 900])
-        outer.setStretchFactor(0, 0)
-        outer.setStretchFactor(1, 1)
-        outer.setChildrenCollapsible(False)
+            outer.addWidget(inner)
+            outer.setSizes([280, 900])
+            outer.setStretchFactor(0, 0)
+            outer.setStretchFactor(1, 1)
+            outer.setChildrenCollapsible(False)
 
     def _build_toolbar(self):
         tb = QToolBar("Главная")
@@ -570,23 +684,30 @@ class NfoEditorWindow(QMainWindow):
 
         style = self.style()
 
-        act_folder = QAction(
-            style.standardIcon(QStyle.StandardPixmap.SP_DirOpenIcon),
-            "Папка",
-            self,
-        )
-        act_folder.setShortcut(QKeySequence("Ctrl+O"))
-        act_folder.setToolTip("Открыть папку (Ctrl+O)")
-        act_folder.triggered.connect(self.open_folder)
-        tb.addAction(act_folder)
+        if not self._single_mode:
+            act_folder = QAction(
+                style.standardIcon(QStyle.StandardPixmap.SP_DirOpenIcon),
+                "Папка",
+                self,
+            )
+            act_folder.setShortcut(QKeySequence("Ctrl+O"))
+            act_folder.setToolTip("Открыть папку (Ctrl+O)")
+            act_folder.triggered.connect(self.open_folder)
+            tb.addAction(act_folder)
 
         act_file = QAction(
             style.standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton),
             "Файл",
             self,
         )
-        act_file.setShortcut(QKeySequence("Ctrl+Shift+O"))
-        act_file.setToolTip("Открыть .nfo файл напрямую (Ctrl+Shift+O)")
+        act_file.setShortcut(
+            QKeySequence("Ctrl+Shift+O")
+            if not self._single_mode
+            else QKeySequence("Ctrl+O")
+        )
+        act_file.setToolTip(
+            "Открыть .nfo файл" + ("" if self._single_mode else " (Ctrl+Shift+O)")
+        )
         act_file.triggered.connect(self.open_file)
         tb.addAction(act_file)
 
@@ -602,17 +723,17 @@ class NfoEditorWindow(QMainWindow):
         act_save.triggered.connect(self.save_file)
         tb.addAction(act_save)
 
-        tb.addSeparator()
-
-        act_refresh = QAction(
-            style.standardIcon(QStyle.StandardPixmap.SP_BrowserReload),
-            "Обновить",
-            self,
-        )
-        act_refresh.setShortcut(QKeySequence("F5"))
-        act_refresh.setToolTip("Обновить список файлов (F5)")
-        act_refresh.triggered.connect(self.refresh_file_list)
-        tb.addAction(act_refresh)
+        if not self._single_mode:
+            tb.addSeparator()
+            act_refresh = QAction(
+                style.standardIcon(QStyle.StandardPixmap.SP_BrowserReload),
+                "Обновить",
+                self,
+            )
+            act_refresh.setShortcut(QKeySequence("F5"))
+            act_refresh.setToolTip("Обновить список файлов (F5)")
+            act_refresh.triggered.connect(self.refresh_file_list)
+            tb.addAction(act_refresh)
 
         tb.addSeparator()
 
@@ -707,6 +828,7 @@ class NfoEditorWindow(QMainWindow):
             return
 
         from PyQt6.QtWidgets import QMenu
+
         menu = QMenu(self)
         act_rename = menu.addAction("Переименовать")
         act_rename.triggered.connect(lambda: self._rename_file(item))
@@ -750,8 +872,14 @@ class NfoEditorWindow(QMainWindow):
         files_to_rename = [
             (mp4_path, new_path),
             (mp4_path.with_suffix(".nfo"), new_path.with_suffix(".nfo")),
-            (mp4_path.parent / f"{base}.en.srt", new_path.parent / f"{new_base}.en.srt"),
-            (mp4_path.parent / f"{base}.ru.srt", new_path.parent / f"{new_base}.ru.srt"),
+            (
+                mp4_path.parent / f"{base}.en.srt",
+                new_path.parent / f"{new_base}.en.srt",
+            ),
+            (
+                mp4_path.parent / f"{base}.ru.srt",
+                new_path.parent / f"{new_base}.ru.srt",
+            ),
             (mp4_path.parent / f"{base}.srt", new_path.parent / f"{new_base}.srt"),
             (mp4_path.parent / f"{base}.ass", new_path.parent / f"{new_base}.ass"),
         ]
@@ -770,9 +898,7 @@ class NfoEditorWindow(QMainWindow):
                     new.rename(old)
                 except Exception:
                     pass
-            QMessageBox.critical(
-                self, "Ошибка", f"Не удалось переименовать файл:\n{e}"
-            )
+            QMessageBox.critical(self, "Ошибка", f"Не удалось переименовать файл:\n{e}")
             return
 
         # обновляем список
@@ -1108,17 +1234,19 @@ class NfoEditorWindow(QMainWindow):
             except Exception:
                 current_res = current_mp4
 
-        for i in range(self.list_files.count()):
-            item = self.list_files.item(i)
-            path = Path(item.data(Qt.ItemDataRole.UserRole))
-            label = self._item_label(path)
-            if (
-                current_res is not None
-                and self._dirty
-                and self._paths_equal(path, current_res)
-            ):
-                label = f"{label} •"
-            item.setText(label)
+        # обновляем tooltip в списке (если список существует)
+        if hasattr(self, "list_files"):
+            for i in range(self.list_files.count()):
+                item = self.list_files.item(i)
+                path = Path(item.data(Qt.ItemDataRole.UserRole))
+                label = self._item_label(path)
+                if (
+                    current_res is not None
+                    and self._dirty
+                    and self._paths_equal(path, current_res)
+                ):
+                    label = f"{label} •"
+                item.setText(label)
 
     def _item_label(self, mp4_path: Path) -> str:
         """Формирует подпись элемента списка с маркерами."""
@@ -1505,25 +1633,75 @@ class NfoEditorWindow(QMainWindow):
             QMessageBox.critical(self, "Ошибка", f"Не удалось открыть файл: {e}")
 
     def open_file(self):
-        start = str(self.current_folder) if self.current_folder else ""
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Открыть .nfo напрямую",
-            start,
-            "NFO files (*.nfo);;XML files (*.xml);;All files (*)",
-        )
-        if not path:
-            return
-        if not self._confirm_leave():
-            return
-        p = Path(path)
-        # открываем папку и пытаемся выбрать соответствующий mp4
-        mp4 = p.with_suffix(".mp4")
-        if mp4.exists():
-            self._open_folder(p.parent, select=mp4)
+        start = ""
+        if self.doc.path:
+            start = str(self.doc.path.parent)
+        elif self.current_folder:
+            start = str(self.current_folder)
+
+        if self._single_mode:
+            # в упрощённом режиме — диалог выбора .nfo файла
+            path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Открыть .nfo",
+                start,
+                "NFO files (*.nfo);;XML files (*.xml);;All files (*)",
+            )
+            if not path:
+                return
+            if not self._confirm_leave():
+                return
+            p = Path(path)
+            try:
+                self._loading = True
+                self.doc.load(p)
+                # ищем соответствующий mp4
+                mp4 = p.with_suffix(".mp4")
+                self.doc.video_path = mp4 if mp4.exists() else None
+                self._populate_from_doc()
+                self._dirty = False
+                self._update_title()
+                self.statusBar().showMessage(str(p), 4000)
+                if self.doc.video_path:
+                    self.media_player.stop()
+                    from PyQt6.QtCore import QUrl
+
+                    self.media_player.setSource(
+                        QUrl.fromLocalFile(str(self.doc.video_path))
+                    )
+                    self._video_duration = 0
+                    self.video_slider.setEnabled(False)
+                    self.video_slider.setValue(0)
+                    if self.history.get("show_preview", True):
+                        self._extract_preview_frame(self.doc.video_path)
+                    else:
+                        self.video_preview.hide()
+                        self.video_widget.show()
+                    self._load_video_info(self.doc.video_path)
+                    self._update_file_info(self.doc.video_path)
+                self._validate_fields()
+            except Exception as e:
+                QMessageBox.critical(self, "Ошибка", f"Не удалось открыть файл:\n{e}")
+            finally:
+                self._loading = False
         else:
-            # mp4 нет — просто открываем папку
-            self._open_folder(p.parent, autoload_first=True)
+            # обычный режим — диалог выбора .nfo с привязкой к папке
+            path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Открыть .nfo напрямую",
+                start,
+                "NFO files (*.nfo);;XML files (*.xml);;All files (*)",
+            )
+            if not path:
+                return
+            if not self._confirm_leave():
+                return
+            p = Path(path)
+            mp4 = p.with_suffix(".mp4")
+            if mp4.exists():
+                self._open_folder(p.parent, select=mp4)
+            else:
+                self._open_folder(p.parent, autoload_first=True)
 
     def save_file(self) -> bool:
         if not self.doc.path:
@@ -2167,8 +2345,18 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("NFO Editor")
     app.setOrganizationName("nfo_editor")
-    initial = sys.argv[1] if len(sys.argv) > 1 else None
-    win = NfoEditorWindow(initial)
+
+    # определяем режим по типу аргумента
+    initial = None
+    single_mode = False
+    if len(sys.argv) > 1:
+        arg = sys.argv[1]
+        initial = arg
+        p = Path(arg).expanduser()
+        if p.is_file():
+            single_mode = True
+
+    win = NfoEditorWindow(initial, single_mode=single_mode)
     win.show()
     sys.exit(app.exec())
 
