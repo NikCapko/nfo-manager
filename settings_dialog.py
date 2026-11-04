@@ -3,6 +3,9 @@ from PyQt6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QSpinBox,
     QVBoxLayout,
 )
 
@@ -34,6 +37,15 @@ class SettingsDialog(QDialog):
         )
         video_layout.addWidget(self.chk_show_preview)
 
+        sub_font_row = QHBoxLayout()
+        sub_font_row.addWidget(QLabel("Размер шрифта субтитров:"))
+        self.spin_sub_font = QSpinBox()
+        self.spin_sub_font.setRange(10, 40)
+        self.spin_sub_font.setValue(int(self.settings.get("subtitle_font_size", 16)))
+        sub_font_row.addWidget(self.spin_sub_font)
+        sub_font_row.addStretch()
+        video_layout.addLayout(sub_font_row)
+
         video_group.setLayout(video_layout)
         layout.addWidget(video_group)
 
@@ -49,4 +61,5 @@ class SettingsDialog(QDialog):
 
     def _on_accept(self):
         self.settings["show_preview"] = self.chk_show_preview.isChecked()
+        self.settings["subtitle_font_size"] = self.spin_sub_font.value()
         self.accept()

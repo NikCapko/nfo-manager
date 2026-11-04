@@ -31,6 +31,7 @@ from PyQt6 import QtGui
 from PyQt6.QtCore import Qt, QUrl
 from PyQt6.QtGui import (
     QAction,
+    QBrush,
     QCloseEvent,
     QDragEnterEvent,
     QDropEvent,
@@ -53,6 +54,7 @@ from PyQt6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPushButton,
     QSizePolicy,
@@ -70,6 +72,7 @@ from aspect_ratio_label import AspectRatioLabel
 from clickable_slider import ClickableSlider
 from preview_worker import PreviewWorker
 from settings_dialog import SettingsDialog
+from subtitle_parser import AssParser, SubtitleParser
 from templates_dialog import TemplatesDialog
 from video_info_worker import VideoInfoWorker
 
@@ -336,9 +339,22 @@ class NfoEditorWindow(QMainWindow):
         self._previous_volume = 100
         self._is_muted = False
 
+        self._subtitles: dict[
+            str, list[tuple[int, int, str]]
+        ] = {}  # {"en": [...], "ru": [...]}
+        self._current_sub_lang: Optional[str] = None
+        self._available_sub_langs: list[str] = []
+
         self._apply_theme(self.history.get("theme", "light"))
         self._build_ui()
         self._connect_dirty_signals()
+
+        size = self.history.get("subtitle_font_size", 16)
+        self.subtitle_label.setStyleSheet(
+            f"background: rgba(0, 0, 0, 180); color: white; "
+            f"padding: 6px 12px; border-radius: 4px; "
+            f"font-size: {size}px; margin: 10px;"
+        )
 
         if initial_path:
             self._open_initial_path(Path(initial_path))
@@ -558,15 +574,15 @@ class NfoEditorWindow(QMainWindow):
                         self._dirty = False
                         self._update_title()
                         self.media_player.stop()
-                        from PyQt6.QtCore import QUrl
 
                         self.media_player.setSource(QUrl.fromLocalFile(str(path)))
                         if self.history.get("show_preview", True):
                             self._extract_preview_frame(path)
                         else:
                             self.video_preview.hide()
-                            self.video_widget.show()
+                            self.video_container.show()
                         self._load_video_info(path)
+                        self._load_subtitles(path)
                         self._update_file_info(path)
                         self._validate_fields()
                     except Exception as e:
@@ -583,15 +599,15 @@ class NfoEditorWindow(QMainWindow):
                     self._dirty = False
                     self._update_title()
                     self.media_player.stop()
-                    from PyQt6.QtCore import QUrl
 
                     self.media_player.setSource(QUrl.fromLocalFile(str(path)))
                     if self.history.get("show_preview", True):
                         self._extract_preview_frame(path)
                     else:
                         self.video_preview.hide()
-                        self.video_widget.show()
+                        self.video_container.show()
                     self._load_video_info(path)
+                    self._load_subtitles(path)
                     self._update_file_info(path)
                     self._validate_fields()
                     self._loading = False
@@ -606,7 +622,6 @@ class NfoEditorWindow(QMainWindow):
                     self._update_title()
                     if self.doc.video_path:
                         self.media_player.stop()
-                        from PyQt6.QtCore import QUrl
 
                         self.media_player.setSource(
                             QUrl.fromLocalFile(str(self.doc.video_path))
@@ -615,8 +630,9 @@ class NfoEditorWindow(QMainWindow):
                             self._extract_preview_frame(self.doc.video_path)
                         else:
                             self.video_preview.hide()
-                            self.video_widget.show()
+                            self.video_container.show()
                         self._load_video_info(self.doc.video_path)
+                        self._load_subtitles(self.doc.video_path)
                         self._update_file_info(self.doc.video_path)
                     self._validate_fields()
                 except Exception as e:
@@ -837,8 +853,6 @@ class NfoEditorWindow(QMainWindow):
         if item is None:
             return
 
-        from PyQt6.QtWidgets import QMenu
-
         menu = QMenu(self)
         act_rename = menu.addAction("Переименовать")
         act_rename.triggered.connect(lambda: self._rename_file(item))
@@ -979,22 +993,26 @@ class NfoEditorWindow(QMainWindow):
         left_layout.addWidget(self._build_list_box("Теги", "tags"))
 
         self.video_preview = AspectRatioLabel()
-        self.video_preview.setMaximumHeight(270)
-        self.video_preview.setMinimumHeight(270)
+        self.video_preview.setFixedHeight(200)
         self.video_preview.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.video_preview.setCursor(Qt.CursorShape.PointingHandCursor)
         left_layout.addWidget(self.video_preview, 1)
 
-        # left_layout.addWidget(QLabel("Превью видео"))
+        # контейнер для видео + overlay субтитров
+        self.video_container = QWidget()
+        self.video_container.setFixedHeight(200)
+        video_container_layout = QVBoxLayout()
+        video_container_layout.setContentsMargins(0, 0, 0, 0)
+        video_container_layout.setSpacing(0)
+        self.video_container.setLayout(video_container_layout)
+
         self.video_widget = QVideoWidget()
-        self.video_widget.setMaximumHeight(270)
-        self.video_widget.setMinimumHeight(270)
-        self.video_widget.setStyleSheet("background: black;")
-        self.video_widget.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.video_widget.setStyleSheet("background: #2b2b2b;")
-        self.video_widget.hide()
-        # self.video_widget.setToolTip("← → перемотка ±10 сек, ↑ ↓ ±1 мин")
-        left_layout.addWidget(self.video_widget, 1)
+        self.video_widget.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        # self.video_widget.hide()
+        video_container_layout.addWidget(self.video_widget, 1)
+
+        left_layout.addWidget(self.video_container, 1)
 
         self.video_slider = ClickableSlider(Qt.Orientation.Horizontal)
         self.video_slider.setEnabled(False)
@@ -1005,6 +1023,21 @@ class NfoEditorWindow(QMainWindow):
 
         self.video_preview.installEventFilter(self)
         self.video_widget.installEventFilter(self)
+
+        # субтитры под видео
+        self.subtitle_label = QLabel()
+        self.subtitle_label.setAlignment(
+            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom
+        )
+        self.subtitle_label.setWordWrap(True)
+        self.subtitle_label.setTextFormat(Qt.TextFormat.RichText)
+        self.subtitle_label.setStyleSheet(
+            "background: rgba(0, 0, 0, 200); color: white; "
+            "padding: 8px 16px; border-radius: 4px; "
+            "font-size: 16px; min-height: 30px;"
+        )
+        self.subtitle_label.hide()
+        left_layout.addWidget(self.subtitle_label)
 
         # кнопки управления
         video_btns = QHBoxLayout()
@@ -1034,6 +1067,14 @@ class NfoEditorWindow(QMainWindow):
         self.lbl_time = QLabel("00:00 / 00:00")
         self.lbl_time.setStyleSheet("color: palette(mid); font-family: monospace;")
         video_btns.addWidget(self.lbl_time)
+
+        # кнопка переключения субтитров
+        self.btn_subtitles = QPushButton("Субтитры: нет")
+        self.btn_subtitles.setFixedWidth(140)
+        self.btn_subtitles.setToolTip("Переключить язык субтитров")
+        self.btn_subtitles.clicked.connect(self._cycle_subtitles)
+        self.btn_subtitles.setEnabled(False)
+        video_btns.addWidget(self.btn_subtitles)
 
         left_layout.addLayout(video_btns)
 
@@ -1383,7 +1424,6 @@ class NfoEditorWindow(QMainWindow):
                 color = palette.color(
                     palette.ColorGroup.Disabled, palette.ColorRole.Text
                 )
-                from PyQt6.QtGui import QBrush
 
                 item.setForeground(QBrush(color))
             self.list_files.addItem(item)
@@ -1503,12 +1543,13 @@ class NfoEditorWindow(QMainWindow):
             # загружаем видео в плеер
             self.media_player.stop()
             self.media_player.setSource(QUrl.fromLocalFile(str(mp4_path)))
+            self._load_subtitles(mp4_path)
             if self.history.get("show_preview", True):
                 self._extract_preview_frame(mp4_path)
             else:
                 # превью отключено — сразу показываем плеер
                 self.video_preview.hide()
-                self.video_widget.show()
+                self.video_container.show()
             self.video_slider.setEnabled(False)
             self.video_slider.setValue(0)
             self._video_duration = 0
@@ -1674,7 +1715,6 @@ class NfoEditorWindow(QMainWindow):
                 self.statusBar().showMessage(str(p), 4000)
                 if self.doc.video_path:
                     self.media_player.stop()
-                    from PyQt6.QtCore import QUrl
 
                     self.media_player.setSource(
                         QUrl.fromLocalFile(str(self.doc.video_path))
@@ -1688,6 +1728,7 @@ class NfoEditorWindow(QMainWindow):
                         self.video_preview.hide()
                         self.video_widget.show()
                     self._load_video_info(self.doc.video_path)
+                    self._load_subtitles(self.doc.video_path)
                     self._update_file_info(self.doc.video_path)
                 self._validate_fields()
             except Exception as e:
@@ -1980,7 +2021,7 @@ class NfoEditorWindow(QMainWindow):
 
     def _toggle_play(self):
         self.video_preview.hide()
-        self.video_widget.show()
+        self.video_container.show()
         self.video_widget.setFocus()
         if self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
             self.media_player.pause()
@@ -1991,13 +2032,13 @@ class NfoEditorWindow(QMainWindow):
 
     def _pause_video(self):
         self.video_preview.hide()
-        self.video_widget.show()
+        self.video_container.show()
         self.media_player.pause()
         self.btn_play.setText("▶")
 
     def _stop_video(self):
         self.video_preview.hide()
-        self.video_widget.show()
+        self.video_container.show()
         self.media_player.stop()
         self.media_player.setPosition(0)
         self.btn_play.setText("▶")
@@ -2052,12 +2093,13 @@ class NfoEditorWindow(QMainWindow):
         return f"{minutes:02d}:{seconds:02d}"
 
     def _update_time_display(self, position: int):
-        """Обновляет отображение текущей позиции."""
         current = self._format_time(position)
         total = self._format_time(self._video_duration)
         self.lbl_time.setText(f"{current} / {total}")
         if not self._slider_pressed:
             self.video_slider.setValue(position)
+        # обновляем субтитры
+        self._update_subtitle_display(position)
 
     def _update_duration(self, duration: int):
         self._video_duration = duration
@@ -2080,10 +2122,21 @@ class NfoEditorWindow(QMainWindow):
 
     def eventFilter(self, obj, event):
 
+        if obj == self.video_container and event.type() == event.Type.Resize:
+            # позиционируем overlay внизу контейнера
+            w = self.video_container.width()
+            h = self.video_container.height()
+            label_w = max(100, w - 40)
+            label_h = self.subtitle_label.sizeHint().height()
+            self.subtitle_label.setFixedWidth(label_w)
+            self.subtitle_label.move((w - label_w) // 2, h - label_h - 10)
+            self.subtitle_label.raise_()
+            return False
+
         if obj == self.video_preview and event.type() == event.Type.MouseButtonPress:
             # клик по превью — запускаем воспроизведение
             self.video_preview.hide()
-            self.video_widget.show()
+            self.video_container.show()
             self.video_widget.setFocus()
             self._toggle_play()
             return True
@@ -2151,7 +2204,7 @@ class NfoEditorWindow(QMainWindow):
         """Запускает асинхронное извлечение кадра."""
         if not self.history.get("show_preview", True):
             self.video_preview.hide()
-            self.video_widget.show()
+            self.video_container.show()
             return
         mp4_str = str(mp4_path)
         self._current_preview_path = mp4_str
@@ -2164,7 +2217,7 @@ class NfoEditorWindow(QMainWindow):
         # очищаем старое превью сразу
         self.video_preview.clear()
         self.video_preview.show()
-        self.video_widget.hide()
+        self.video_container.hide()
 
         worker = PreviewWorker(mp4_path, self)
         worker.finished.connect(self._on_preview_ready)
@@ -2202,7 +2255,7 @@ class NfoEditorWindow(QMainWindow):
             return
         self.video_preview.setPixmap(pixmap)
         self.video_preview.show()
-        self.video_widget.hide()
+        self.video_container.hide()
 
     def _on_preview_failed(self, video_path: str):
         if video_path != self._current_preview_path:
@@ -2210,7 +2263,7 @@ class NfoEditorWindow(QMainWindow):
         self.video_preview.clear()
         self.video_preview.setText("Нет превью")
         self.video_preview.show()
-        self.video_widget.hide()
+        self.video_container.hide()
 
     def _get_current_metadata(self) -> dict:
         """Возвращает текущие жанры/теги/студии из формы."""
@@ -2349,6 +2402,110 @@ class NfoEditorWindow(QMainWindow):
             self.history.update(dlg.settings)
             save_history(self.history)
             self.statusBar().showMessage("Настройки сохранены", 2000)
+
+    def _load_subtitles(self, mp4_path: Path):
+        """Загружает субтитры для видео (SRT и ASS)."""
+        self._subtitles = {}
+        self._available_sub_langs = []
+        self._current_sub_lang = None
+
+        base = mp4_path.stem
+        folder = mp4_path.parent
+
+        for lang, suffixes in [
+            ("en", [".en.srt", ".en.ass"]),
+            ("ru", [".ru.srt", ".ru.ass", ".ass"]),
+        ]:
+            for suffix in suffixes:
+                path = folder / f"{base}{suffix}"
+                if suffix.endswith(".srt"):
+                    subs = SubtitleParser.parse(path)
+                elif suffix.endswith(".ass"):
+                    subs = AssParser.parse(path)
+                else:
+                    subs = None
+
+                if subs:
+                    print(f"has subs subs = {subs}")
+                    self._subtitles[lang] = subs
+                    self._available_sub_langs.append(lang)
+                    break  # если нашли SRT, не ищем ASS для этого языка
+
+        # выбираем первый доступный язык
+        if self._available_sub_langs:
+            if "ru" in self._available_sub_langs:
+                self._current_sub_lang = "ru"
+            else:
+                self._current_sub_lang = self._available_sub_langs[0]
+
+        self._update_subtitle_button()
+
+    def _update_subtitle_button(self):
+        """Обновляет текст кнопки субтитров."""
+        if not self._available_sub_langs:
+            self.btn_subtitles.setText("Субтитры: нет")
+            self.btn_subtitles.setEnabled(False)
+            self.subtitle_label.hide()
+            self.video_preview.setFixedHeight(270)
+            self.video_container.setFixedHeight(270)
+        else:
+            self.btn_subtitles.setEnabled(True)
+            lang_names = {"en": "EN", "ru": "RU"}
+            if self._current_sub_lang:
+                self.btn_subtitles.setText(
+                    f"Субтитры: {lang_names.get(self._current_sub_lang, self._current_sub_lang)}"
+                )
+                self.video_preview.setFixedHeight(200)
+                self.video_container.setFixedHeight(200)
+            else:
+                self.btn_subtitles.setText("Субтитры: выкл")
+                self.video_preview.setFixedHeight(270)
+                self.video_container.setFixedHeight(270)
+
+    def _cycle_subtitles(self):
+        """Переключает язык субтитров: выкл → ru → en → выкл."""
+        if not self._available_sub_langs:
+            return
+        # порядок: None → ru → en → None
+        order = [None]
+        for lang in ["ru", "en"]:
+            if lang in self._available_sub_langs:
+                order.append(lang)
+        try:
+            idx = order.index(self._current_sub_lang)
+        except ValueError:
+            idx = -1
+        self._current_sub_lang = order[(idx + 1) % len(order)]
+        self._update_subtitle_button()
+        if self._current_sub_lang is None:
+            self.subtitle_label.hide()
+        else:
+            # обновим сразу текущую позицию
+            self._update_subtitle_display(self.media_player.position())
+
+    def _update_subtitle_display(self, position: int):
+        """Обновляет текст субтитров по текущей позиции."""
+        if self._current_sub_lang is None:
+            self.subtitle_label.hide()
+            return
+        subs = self._subtitles.get(self._current_sub_lang, [])
+        if not subs:
+            self.subtitle_label.hide()
+            return
+        # бинарный поиск подходящей субтитры
+        text = None
+        for start, end, t in subs:
+            if start <= position <= end:
+                text = t
+                break
+            if start > position:
+                break
+        if text:
+            self.subtitle_label.setText(text)
+            self.subtitle_label.show()
+        else:
+            self.subtitle_label.setText(text)
+            #self.subtitle_label.hide()
 
 
 def main():
